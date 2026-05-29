@@ -207,7 +207,7 @@ impl Display for Value {
             Value::Number { val } => write!(f, "{}", val),
             Value::Bool { val } => write!(f, "{}", val),
             Value::String { val } => write!(f, "\"{}\"", val),
-            Value::Closure { params, body, env, service_name } =>
+            Value::Closure { params, body, env, .. } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
             Value::ActionClosure { stmts, env, service_name } =>
                 write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
@@ -219,7 +219,7 @@ impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Literal { val } => write!(f, "{}", val),
-            Expr::Tuple { val } => write!(f, "vector"),
+            Expr::Tuple { .. } => write!(f, "vector"),
             Expr::KeyVal { key, value } => write!(f, "keyval: {}, {}", key, value),
             Expr::Variable { ident } => write!(f, "{}", ident),
             Expr::Unop { op, expr } => write!(f, "{}{}", op, expr),
@@ -242,7 +242,7 @@ impl Display for Expr {
                     stmts.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 ),
             Expr::MemberAccess { service, member } => write!(f, "{}.{}", service, member),
-            Expr::Select { table_name, column_names, where_clause } => write!(f, "{}", where_clause),
+            Expr::Select { where_clause, .. } => write!(f, "{}", where_clause),
             Expr::Table {records , ..} => {
                 write!(f, "[",)?;
                 for (i, record) in records.iter().enumerate() {
@@ -296,7 +296,7 @@ impl Display for Decl {
                     write!(f, "def {} = {}", name, val)
                 }
             },
-            Decl::TableDecl { name, fields } => { write!(f, "table {} created", name) }
+            Decl::TableDecl { name, .. } => { write!(f, "table {} created", name) }
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::{ collections::{ HashMap, HashSet }, vec };
+use std::{ collections::{ HashMap, HashSet }, /*vec*/ };
 
 use crate::ast;
 
@@ -32,7 +32,6 @@ impl DependAnalysis {
                     tables.insert(name.clone());
                     dep_graph.insert(name.clone(), HashSet::new());
                 }
-                _ => {}
             }
         }
 

@@ -26,10 +26,10 @@ impl Expr {
                     item.alpha_rename(var_binded, renames);
                 }
             }
-            Expr::Unop { op, expr } => {
+            Expr::Unop { expr, ..} => {
                 expr.alpha_rename(var_binded, renames);
             }
-            Expr::Binop { op, expr1, expr2 } => {
+            Expr::Binop { expr1, expr2, .. } => {
                 expr1.alpha_rename(var_binded, renames);
                 expr2.alpha_rename(var_binded, renames);
             }
@@ -69,7 +69,7 @@ impl Expr {
                     record.alpha_rename(var_binded, renames);
                 }
             }
-            Expr::Fold { table_name, column_name, operation, identity } => {
+            Expr::Fold { operation, identity, .. } => {
                 operation.alpha_rename(var_binded, renames);
                 identity.alpha_rename(var_binded, renames);
             },
@@ -81,8 +81,9 @@ impl Expr {
 impl ActionStmt {
     pub fn alpha_rename(
         &mut self,
-        var_binded: &HashSet<String>,
-        renames: &HashMap<String, String>,
+        // Added underscores to silence warnings due to this being a stub.
+        _var_binded: &HashSet<String>,
+        _renames: &HashMap<String, String>,
     ) {
         // TODO: Implement alpha renaming for ActionStmt based on its structure
         // This is a placeholder - adjust based on ActionStmt's actual fields

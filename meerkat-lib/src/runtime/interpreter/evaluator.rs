@@ -4,6 +4,7 @@ use crate::ast::{
 use std::collections::HashSet;
 use crate::runtime::manager::Manager;
 use crate::runtime::txn::Transaction;
+use crate::runtime::{Symbol, BindingId};
 
 #[derive(Debug)]
 pub enum EvalError {
@@ -54,7 +55,7 @@ pub async fn eval(
                 arg_vals.push(eval(arg, env, ctx).await?);
             }
             match func_val {
-                Value::Closure { params, body, env: closure_env, service_name: closure_svc } => {
+                Value::Closure { params, body, env: closure_env, service_name: closure_svc, .. } => {
                     let mut new_env = closure_env.clone();
                     for (param, arg_val) in params.iter().zip(arg_vals) {
                         new_env.push((param.clone(), arg_val));
@@ -65,7 +66,7 @@ pub async fn eval(
             }
         }
 
-        Expr::Variable { ident } => {
+        Expr::Variable { ident, .. } => {
             for (var_name, var_val) in env.iter().rev() {
                 if var_name == ident {
                     return Ok(var_val.clone());
@@ -109,7 +110,7 @@ pub async fn eval(
             }
         }
 
-        Expr::Func { params, body } => {
+        Expr::Func { params, body, .. } => {
             let var_binded: HashSet<String> = params.iter().cloned().collect();
             let free_vars = body.free_var(&HashSet::new(), &var_binded);
             let captured_env: Vec<(String, Value)> = env.iter()
@@ -123,9 +124,12 @@ pub async fn eval(
                 .collect();
             Ok(Value::Closure {
                 params: params.clone(),
+                param_ids: Vec::new(),
                 body: body.clone(),
                 env: captured_env,
                 service_name: ctx.service_name.to_string(),
+                service_name_id: Symbol(0),
+                service_name_binding_id: BindingId(0),
             })
         }
 
@@ -147,10 +151,12 @@ pub async fn eval(
                 stmts: stmts.clone(),
                 env: captured_env,
                 service_name: ctx.service_name.to_string(),
+                service_name_id: Symbol(0),
+                service_name_binding_id: BindingId(0),
             })
         }
 
-        Expr::MemberAccess { service, member } => {
+        Expr::MemberAccess { service, member, .. } => {
             // Manager figures out whether service is local or remote
             ctx.manager.lookup(member, service, ctx.txn.as_deref_mut()).await
         }
@@ -161,7 +167,8 @@ pub async fn eval(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Expr, Value, BinOp};
+    use crate::ast::{Expr, Value, BinOp, ActionStmt};
+    use crate::runtime::{Symbol, BindingId};
     use crate::runtime::Manager;
 
     #[tokio::test]
@@ -192,9 +199,10 @@ mod tests {
         let mut ctx = EvalContext { manager: &mut manager, service_name: "", txn: None };
         let func_expr = Expr::Func {
             params: vec!["x".to_string()],
+            param_ids: vec![(Symbol(0), BindingId(0))],
             body: Box::new(Expr::Binop {
                 op: BinOp::Add,
-                expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                 expr2: Box::new(Expr::Literal { val: Value::Number { val: 10 } }),
             }),
         };
@@ -213,6 +221,8 @@ mod tests {
         let action_expr = Expr::Action(vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Literal { val: Value::Number { val: 5 } },
             },
         ]);
@@ -234,10 +244,11 @@ mod tests {
         ];
         let func_expr = Expr::Func {
             params: vec!["x".to_string()],
+            param_ids: vec![(Symbol(0), BindingId(0))],
             body: Box::new(Expr::Binop {
                 op: BinOp::Add,
-                expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
-                expr2: Box::new(Expr::Variable { ident: "a".to_string() }),
+                expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
+                expr2: Box::new(Expr::Variable { ident: "a".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
             }),
         };
         let result = eval(&func_expr, &env, &mut ctx).await.unwrap();

@@ -152,7 +152,7 @@ async fn run_server(
     // Load services after network and remote services are ready,
     // so that remote lookups during service initialization work correctly
     for stmt in prog {
-        if let Stmt::Service { name, decls } = stmt {
+        if let Stmt::Service { name, decls, .. } = stmt {
             manager.create_service(name.clone(), decls.clone()).await
                 .map_err(|e| format!("Service error: {}", e))?;
             println!("Service '{}' loaded", name);
@@ -236,17 +236,17 @@ async fn run_client(
 
     for stmt in &prog {
         match stmt {
-            Stmt::Service { name, decls } => {
+            Stmt::Service { name, decls, .. } => {
                 node.manager.create_service(name.clone(), decls.clone()).await
                     .map_err(|e| format!("Service error: {}", e))?;
                 println!("Service '{}' loaded", name);
             }
-            Stmt::Test { service, stmts } => {
+            Stmt::Test { service, stmts, .. } => {
                 node.manager.execute_action(service, stmts).await
                     .map_err(|e| format!("Test failed in '{}': {}", service, e))?;
                 println!("@test({}) passed", service);
             }
-            Stmt::Import { path, service: svc_name } => {
+            Stmt::Import { path, service: svc_name, .. } => {
                 if let Some(url) = remote_url_map.get(svc_name) {
                     node.manager.remote_services.insert(
                         svc_name.clone(),
@@ -262,7 +262,7 @@ async fn run_client(
                     node.load_program(import_path_str).map_err(|e| format!("Import parse error: {}", e))?;
                     let import_program = node.programs.last().ok_or("No program loaded")?;
                     for import_stmt in &import_program.ast {
-                        if let Stmt::Service { name, decls } = import_stmt {
+                        if let Stmt::Service { name, decls, .. } = import_stmt {
                             node.manager.create_service(name.clone(), decls.clone()).await
                                 .map_err(|e| format!("Import service error: {}", e))?;
                             println!("Imported service '{}'", name);

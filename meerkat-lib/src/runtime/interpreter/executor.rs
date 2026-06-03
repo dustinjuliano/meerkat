@@ -22,7 +22,7 @@ pub async fn execute(
     mut txn: Option<&mut Transaction>,
 ) -> Result<ExecuteEffect, EvalError> {
     match stmt {
-        ActionStmt::Assign { var, expr } => {
+        ActionStmt::Assign { var, expr, .. } => {
             let value = eval(expr, env, &mut EvalContext { manager, service_name, txn: txn.as_deref_mut() }).await?;
             manager.assign(service_name, var, value, txn).await?;
             Ok(ExecuteEffect::None)
@@ -30,7 +30,7 @@ pub async fn execute(
         ActionStmt::Do(expr) => {
             let val = eval(expr, env, &mut EvalContext { manager, service_name, txn: txn.as_deref_mut() }).await?;
             match val {
-                Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
+                Value::ActionClosure { stmts, env: closure_env, service_name: action_svc, .. } => {
                     if manager.remote_services.contains_key(&action_svc) {
                         // Remote actions don't yet participate in the local
                         // transaction; distributed lock coordination is future work.
@@ -59,7 +59,7 @@ pub async fn execute(
                 _ => Err(EvalError::TypeError("assert expects a boolean".to_string())),
             }
         }
-        ActionStmt::Let { name, expr } => {
+        ActionStmt::Let { name, expr, .. } => {
             let val = eval(expr, env, &mut EvalContext { manager, service_name, txn: txn.as_deref_mut() }).await?;
             Ok(ExecuteEffect::Binding(name.clone(), val))
         }

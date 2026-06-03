@@ -13,7 +13,7 @@ impl Expr {
     ) {
         match self {
             Expr::Literal { .. } => {}
-            Expr::Variable { ident } => {
+            Expr::Variable { ident, .. } => {
                 if !var_binded.contains(ident) && renames.contains_key(ident) {
                     *ident = renames.get(ident).unwrap().clone();
                 }
@@ -38,7 +38,7 @@ impl Expr {
                 expr1.alpha_rename(var_binded, renames);
                 expr2.alpha_rename(var_binded, renames);
             }
-            Expr::Func { params, body } => {
+            Expr::Func { params, body, .. } => {
                 let mut new_binds = var_binded.clone();
                 new_binds.extend(params.iter().cloned());
                 body.alpha_rename(&new_binds, renames);

@@ -96,7 +96,7 @@ pub async fn run_repl(
             continue;
         }
 
-        match parse_repl(&buffer) {
+        match parse_repl(&buffer, &mut node.interner) {
             ReplParseResult::Incomplete => {
                 continuation = true;
             }
@@ -135,17 +135,17 @@ async fn exec_stmt(
     remote_url_map: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     match stmt {
-        Stmt::Service { name, decls } => {
+        Stmt::Service { name, decls, .. } => {
             node.manager.create_service(name.clone(), decls).await
                 .map_err(|e| format!("Service '{}': {}", name, e))?;
             Ok(Some(format!("Service '{}' loaded.", name)))
         }
-        Stmt::Test { service, stmts } => {
+        Stmt::Test { service, stmts, .. } => {
             node.manager.execute_action(&service, &stmts).await
                 .map_err(|e| format!("@test({}): {}", service, e))?;
             Ok(Some(format!("@test({}) passed.", service)))
         }
-        Stmt::Import { path, service: svc_name } => {
+        Stmt::Import { path, service: svc_name, .. } => {
             if let Some(url) = remote_url_map.get(&svc_name) {
                 node.manager.remote_services.insert(
                     svc_name.clone(),
@@ -160,7 +160,7 @@ async fn exec_stmt(
             let import_program = node.programs.last().ok_or("No program loaded")?;
             let mut loaded = Vec::new();
             for s in &import_program.ast {
-                if let Stmt::Service { name, decls } = s {
+                if let Stmt::Service { name, decls, .. } = s {
                     node.manager.create_service(name.clone(), decls.clone()).await
                         .map_err(|e| format!("Imported service '{}': {}", name, e))?;
                     loaded.push(name.clone());

@@ -23,13 +23,13 @@ pub mod parser {
 
     use crate::ast::Stmt;
 
-    pub fn parse_string(input: &str) -> Result<Vec<Stmt>, String> {
+    pub fn parse_string(input: &str, interner: &mut crate::runtime::Interner) -> Result<Vec<Stmt>, String> {
         let lex_stream = super::lex::Token::lexer(input)
             .spanned()
             .map(|(t, span)| (span.start, t, span.end));
 
         super::meerkat::ProgParser::new()
-            .parse(lex_stream)
+            .parse(interner, lex_stream)
             .map_err(|e| format!("Parse error: {:?}", e))
     }
 
@@ -37,7 +37,7 @@ pub mod parser {
     ///
     /// Returns `Incomplete` when the grammar signals `UnrecognizedEof`, meaning the user
     /// is mid-statement and the REPL should collect more lines before evaluating.
-    pub fn parse_repl(input: &str) -> super::ReplParseResult {
+    pub fn parse_repl(input: &str, interner: &mut crate::runtime::Interner) -> super::ReplParseResult {
         use super::ReplParseResult;
         use lalrpop_util::ParseError;
 
@@ -49,7 +49,7 @@ pub mod parser {
             .spanned()
             .map(|(t, span)| (span.start, t, span.end));
 
-        match super::meerkat::ProgParser::new().parse(lex_stream) {
+        match super::meerkat::ProgParser::new().parse(interner, lex_stream) {
             Ok(stmts) if !stmts.is_empty() => ReplParseResult::Complete(stmts),
             Ok(_) => ReplParseResult::Incomplete,
             Err(ParseError::UnrecognizedEof { .. }) => ReplParseResult::Incomplete,

@@ -10,6 +10,7 @@ pub struct Program {
 pub struct Node {
     pub programs: Vec<Program>,
     pub manager: Manager,
+    pub interner: crate::runtime::Interner,
 }
 
 impl Node {
@@ -17,6 +18,7 @@ impl Node {
         Self {
             programs: Vec::new(),
             manager: Manager::new(),
+            interner: crate::runtime::Interner::new(),
         }
     }
 
@@ -28,7 +30,7 @@ impl Node {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
 
-        let ast = crate::runtime::parser::parser::parse_string(&content)?;
+        let ast = crate::runtime::parser::parser::parse_string(&content, &mut self.interner)?;
 
         self.programs.push(Program {
             path: path.to_string(),

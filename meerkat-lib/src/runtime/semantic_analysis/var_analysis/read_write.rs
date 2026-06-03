@@ -12,7 +12,7 @@ impl Expr {
     ) -> HashSet<String> {
         match self {
             Expr::Literal { .. } | Expr::Table { .. } => HashSet::new(),
-            Expr::Variable { ident } => {
+            Expr::Variable { ident, .. } => {
                 if var_binded.contains(ident) {
                     HashSet::new()
                 } else {
@@ -41,7 +41,7 @@ impl Expr {
                 free_vars.extend(expr2.free_var(reactive_names, var_binded));
                 free_vars
             }
-            Expr::Func { params, body } => {
+            Expr::Func { params, body, .. } => {
                 let mut new_binds = var_binded.clone();
                 new_binds.extend(params.iter().cloned());
                 body.free_var(reactive_names, &new_binds)
@@ -57,7 +57,7 @@ impl Expr {
                 let mut free_vars = HashSet::new();
                 for stmt in stmts {
                     match stmt {
-                        ActionStmt::Assign { var: _, expr } => {
+                        ActionStmt::Assign { var: _, expr, .. } => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
                         ActionStmt::Do(expr) => {
@@ -66,7 +66,7 @@ impl Expr {
                         ActionStmt::Assert(expr) => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
-                        ActionStmt::Let { name: _, expr } => {
+                        ActionStmt::Let { name: _, expr, .. } => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
                         ActionStmt::Expr(expr) => {

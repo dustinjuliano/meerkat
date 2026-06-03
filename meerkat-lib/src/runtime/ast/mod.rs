@@ -2,6 +2,8 @@ use std::fmt::Display;
 //use crate::runtime::Manager;
 pub mod printer;
 pub use printer::AstPrinter;
+use crate::runtime::Symbol;
+use crate::runtime::BindingId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum UnOp {
@@ -29,28 +31,54 @@ pub enum ActionStmt {
     Let {
         name: String,
         expr: Expr,
+        name_id: Symbol,
+        binding_id: BindingId,
     },
     Expr(Expr),
     Do(Expr),
     Assert(Expr),
     Assign {
         var: String,
+        name_id: Symbol,
+        binding_id: BindingId,
         expr: Expr,
     },
     Insert {
         row: Expr,
         table_name: String,
+        table_name_id: Symbol,
+        table_binding_id: BindingId,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
     ActionStmt(ActionStmt),
-    Update { service: String, decls: Vec<Decl> },
+    Update {
+        service: String,
+        service_id: Symbol,
+        service_binding_id: BindingId,
+        decls: Vec<Decl>,
+    },
     Connect { path: String, addr: String },
-    Import { path: String, service: String },
-    Service { name: String, decls: Vec<Decl> },
-    Test { service: String, stmts: Vec<ActionStmt> },
+    Import {
+        path: String,
+        service: String,
+        service_id: Symbol,
+        service_binding_id: BindingId,
+    },
+    Service {
+        name: String,
+        name_id: Symbol,
+        binding_id: BindingId,
+        decls: Vec<Decl>,
+    },
+    Test {
+        service: String,
+        service_id: Symbol,
+        service_binding_id: BindingId,
+        stmts: Vec<ActionStmt>,
+    },
     Watch { expr: Expr },
 }
 
@@ -67,14 +95,19 @@ pub enum Value {
     },
     Closure {
         params: Vec<String>,
+        param_ids: Vec<(Symbol, BindingId)>,
         body: Box<Expr>,
         env: Vec<(String, Value)>,
         service_name: String,
+        service_name_id: Symbol,
+        service_name_binding_id: BindingId,
     },
     ActionClosure {
         stmts: Vec<ActionStmt>,
         env: Vec<(String, Value)>,
         service_name: String,
+        service_name_id: Symbol,
+        service_name_binding_id: BindingId,
     },
 }
 
@@ -86,12 +119,16 @@ pub enum Expr {
     },
     Variable {
         ident: String,
+        name_id: Symbol,
+        binding_id: BindingId,
     },
     Tuple {
         val: Vec<Expr>
     },
     KeyVal {    // TODO: replace with a Record type (different from Tuple) that is a list of key value pairs
         key: String,
+        key_id: Symbol,
+        key_binding_id: BindingId,
         value: Box<Expr>,
     },
     Unop {
@@ -112,6 +149,7 @@ pub enum Expr {
 
     Func {
         params: Vec<String>,
+        param_ids: Vec<(Symbol, BindingId)>,
         body: Box<Expr>,
     },
     Call {
@@ -124,11 +162,18 @@ pub enum Expr {
 
     MemberAccess {
         service: String,
+        service_id: Symbol,
+        service_binding_id: BindingId,
         member: String,
+        member_id: Symbol,
+        member_binding_id: BindingId,
     },
     Select {
         table_name: String,
+        table_name_id: Symbol,
+        table_binding_id: BindingId,
         column_names: Vec<String>,
+        column_ids: Vec<(Symbol, BindingId)>,
         where_clause: Box<Expr>,
     },
 
@@ -142,7 +187,11 @@ pub enum Expr {
     },
     Fold {
         table_name: String,
+        table_name_id: Symbol,
+        table_binding_id: BindingId,
         column_name: String,
+        column_name_id: Symbol,
+        column_binding_id: BindingId,
         operation: Box<Expr>,
         identity: Box<Expr>,
     }
@@ -152,15 +201,21 @@ pub enum Expr {
 pub enum Decl {
     VarDecl {
         name: String,
+        name_id: Symbol,
+        binding_id: BindingId,
         val: Expr,
     },
     DefDecl {
         name: String,
+        name_id: Symbol,
+        binding_id: BindingId,
         val: Expr,
         is_pub: bool,
     },
     TableDecl {
         name: String,
+        name_id: Symbol,
+        binding_id: BindingId,
         fields: Vec<Field>,
     },
 }
@@ -168,6 +223,8 @@ pub enum Decl {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Field {
     pub name: String,
+    pub name_id: Symbol,
+    pub binding_id: BindingId,
     pub type_: DataType,
 }
 
@@ -211,7 +268,7 @@ impl Display for Value {
             Value::String { val } => write!(f, "\"{}\"", val),
             Value::Closure { params, body, env, .. } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
-            Value::ActionClosure { stmts, env, service_name } =>
+            Value::ActionClosure { stmts, env, service_name, .. } =>
                 write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
         }
     }
@@ -222,14 +279,14 @@ impl Display for Expr {
         match self {
             Expr::Literal { val } => write!(f, "{}", val),
             Expr::Tuple { .. } => write!(f, "vector"),
-            Expr::KeyVal { key, value } => write!(f, "keyval: {}, {}", key, value),
-            Expr::Variable { ident } => write!(f, "{}", ident),
+            Expr::KeyVal { key, value, .. } => write!(f, "keyval: {}, {}", key, value),
+            Expr::Variable { ident, .. } => write!(f, "{}", ident),
             Expr::Unop { op, expr } => write!(f, "{}{}", op, expr),
             Expr::Binop { op, expr1, expr2 } => write!(f, "{} {} {}", expr1, op, expr2),
             Expr::If { cond, expr1, expr2 } => {
                 write!(f, "if {} then {} else {}", cond, expr1, expr2)
             }
-            Expr::Func { params, body } => write!(f, "fn({})[{}]", params.join(","), body),
+            Expr::Func { params, body, .. } => write!(f, "fn({})[{}]", params.join(","), body),
             Expr::Call { func, args } =>
                 write!(
                     f,
@@ -243,7 +300,7 @@ impl Display for Expr {
                     "Action({:?})",
                     stmts.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 ),
-            Expr::MemberAccess { service, member } => write!(f, "{}.{}", service, member),
+            Expr::MemberAccess { service, member, .. } => write!(f, "{}.{}", service, member),
             Expr::Select { where_clause, .. } => write!(f, "{}", where_clause),
             Expr::Table {records , ..} => {
                 write!(f, "[",)?;
@@ -277,12 +334,12 @@ impl Display for Expr {
 impl Display for ActionStmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ActionStmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
+            ActionStmt::Let { name, expr, .. } => write!(f, "let {} = {}", name, expr),
             ActionStmt::Expr(expr) => write!(f, "{}", expr),
             ActionStmt::Do(expr) => write!(f, "do {}", expr),
             ActionStmt::Assert(expr) => write!(f, "assert {}", expr),
-            ActionStmt::Assign { var, expr } => write!(f, "{} = {}", var, expr),
-            ActionStmt::Insert { row, table_name } => write!(f, "insert into {} {}", table_name, row),
+            ActionStmt::Assign { var, expr, .. } => write!(f, "{} = {}", var, expr),
+            ActionStmt::Insert { row, table_name, .. } => write!(f, "insert into {} {}", table_name, row),
         }
     }
 }
@@ -290,8 +347,8 @@ impl Display for ActionStmt {
 impl Display for Decl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Decl::VarDecl { name, val } => { write!(f, "var {} = {}", name, val) },
-            Decl::DefDecl { name, val, is_pub } => {
+            Decl::VarDecl { name, val, .. } => { write!(f, "var {} = {}", name, val) },
+            Decl::DefDecl { name, val, is_pub, .. } => {
                 if *is_pub {
                     write!(f, "pub def {} = {}", name, val)
                 } else {

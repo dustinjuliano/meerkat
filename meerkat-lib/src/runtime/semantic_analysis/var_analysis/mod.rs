@@ -76,22 +76,31 @@ pub fn calc_dep_prog(stmts: &Vec<ast::Stmt>) {
 mod tests {
     use super::*;
     use crate::ast::{Decl, Expr, Stmt, Value};
+    use crate::runtime::{Symbol, BindingId};
 
     #[test]
     fn test_calc_dep_prog_service() {
         let stmts = vec![Stmt::Service {
             name: "s".to_string(),
+            name_id: Symbol(0),
+            binding_id: BindingId(0),
             decls: vec![
                 Decl::VarDecl {
                     name: "x".to_string(),
+                    name_id: Symbol(0),
+                    binding_id: BindingId(0),
                     val: Expr::Literal {
                         val: Value::Number { val: 1 },
                     },
                 },
                 Decl::DefDecl {
                     name: "y".to_string(),
+                    name_id: Symbol(0),
+                    binding_id: BindingId(0),
                     val: Expr::Variable {
                         ident: "x".to_string(),
+                        name_id: Symbol(0),
+                        binding_id: BindingId(0),
                     },
                     is_pub: false,
                 },
@@ -105,17 +114,25 @@ mod tests {
     fn test_calc_dep_prog_update_service() {
         let stmts = vec![Stmt::Update {
             service: "s".to_string(),
+            service_id: Symbol(0),
+            service_binding_id: BindingId(0),
             decls: vec![
                 Decl::VarDecl {
                     name: "x".to_string(),
+                    name_id: Symbol(0),
+                    binding_id: BindingId(0),
                     val: Expr::Literal {
                         val: Value::Number { val: 2 },
                     },
                 },
                 Decl::DefDecl {
                     name: "y".to_string(),
+                    name_id: Symbol(0),
+                    binding_id: BindingId(0),
                     val: Expr::Variable {
                         ident: "x".to_string(),
+                        name_id: Symbol(0),
+                        binding_id: BindingId(0),
                     },
                     is_pub: true,
                 },

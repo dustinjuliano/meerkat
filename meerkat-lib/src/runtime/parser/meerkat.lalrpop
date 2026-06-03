@@ -5,9 +5,10 @@
 // Initial grammar for L1 
 
 // Grammar 
-grammar<'input>;
+grammar<'input>(interner: &mut crate::runtime::Interner);
 
 use crate::ast::{Stmt, ActionStmt, Decl, Expr, UnOp, BinOp, DataType, Field, Value};
+use crate::runtime::{Symbol, BindingId};
 use lalrpop_util::ParseError;
 use crate::runtime::parser::lex::Token;
 
@@ -84,13 +85,16 @@ Stmts: Vec<Stmt> = Stmt*;
 
 Stmt: Stmt = {
     "service" <i:Ident> "{" <ds:Decls> "}" => {
-        Stmt::Service { name: i, decls: ds }
+        let name_id = interner.insert(&i);
+        Stmt::Service { name: i, name_id, binding_id: BindingId(0), decls: ds }
     },
     "@test" "(" <i:Ident> ")" "{" <astmts: ActionStmts> "}" => {
-        Stmt::Test { service: i, stmts: astmts }
+        let service_id = interner.insert(&i);
+        Stmt::Test { service: i, service_id, service_binding_id: BindingId(0), stmts: astmts }
     },
     "import" <i:Ident> => {
-        Stmt::Import { path: format!("{}.mkt", i), service: i }
+        let service_id = interner.insert(&i);
+        Stmt::Import { path: format!("{}.mkt", i), service: i, service_id, service_binding_id: BindingId(0) }
     },
     <a:ActionStmt> => Stmt::ActionStmt(a),
     "watch" <e:Expr> ";" => Stmt::Watch { expr: e },
@@ -99,7 +103,10 @@ Stmt: Stmt = {
 ActionStmts: Vec<ActionStmt> = ActionStmt*;
 
 ActionStmt: ActionStmt = {
-    "let" <i:Ident> "=" <e:Expr> ";" => ActionStmt::Let { name: i, expr: e },
+    "let" <i:Ident> "=" <e:Expr> ";" => {
+        let name_id = interner.insert(&i);
+        ActionStmt::Let { name: i, expr: e, name_id, binding_id: BindingId(0) }
+    },
     "do" <e: Expr> ";" => {
         ActionStmt::Do(e)
     },
@@ -107,24 +114,32 @@ ActionStmt: ActionStmt = {
         ActionStmt::Assert(e)
     },
     "insert"  <e: Expr> "into" <t: Ident> => {
-        ActionStmt::Insert {row: e, table_name: t}
+        let table_name_id = interner.insert(&t);
+        ActionStmt::Insert {row: e, table_name: t, table_name_id, table_binding_id: BindingId(0)}
     },
-    <i:Ident> "=" <e:Expr> ";" => ActionStmt::Assign { var: i, expr: e },
+    <i:Ident> "=" <e:Expr> ";" => {
+        let name_id = interner.insert(&i);
+        ActionStmt::Assign { var: i, name_id, binding_id: BindingId(0), expr: e }
+    },
     <e:Expr> ";" => ActionStmt::Expr(e),
 }
 
 Decl: Decl = {
     "var" <i:Ident> "=" <e:Expr> ";" => {
-        Decl::VarDecl { name: i, val: e }
+        let name_id = interner.insert(&i);
+        Decl::VarDecl { name: i, name_id, binding_id: BindingId(0), val: e }
     },
     "pub" "def" <i:Ident> "=" <e:Expr> ";" => {
-        Decl::DefDecl { name: i, val: e, is_pub: true }
+        let name_id = interner.insert(&i);
+        Decl::DefDecl { name: i, name_id, binding_id: BindingId(0), val: e, is_pub: true }
     },
     "def" <i:Ident> "=" <e:Expr> ";" => {
-        Decl::DefDecl { name: i, val: e, is_pub: false }
+        let name_id = interner.insert(&i);
+        Decl::DefDecl { name: i, name_id, binding_id: BindingId(0), val: e, is_pub: false }
     },
     "table" <i:Ident> "{" <f: Fields> "}" ";" => {
-        Decl::TableDecl {name: i, fields: f }
+        let name_id = interner.insert(&i);
+        Decl::TableDecl {name: i, name_id, binding_id: BindingId(0), fields: f }
     }
 }
 
@@ -132,7 +147,8 @@ Decls: Vec<Decl> = Decl*;
 
 Field: Field = {
    <i:Ident> ":" <t: DataType> "," => {
-    Field {name: i, type_: t}
+    let name_id = interner.insert(&i);
+    Field {name: i, name_id, binding_id: BindingId(0), type_: t}
    } 
 }
 
@@ -172,14 +188,28 @@ SubExpr: Expr = {
     <n:Number> => Expr::Literal { val: Value::Number { val: n } },
     <b:Bool> => Expr::Literal { val: Value::Bool { val: b } },
     <s: "strlit"> => Expr::Literal { val: Value::String { val: s.to_owned() } },
-    <i:Ident> => Expr::Variable { ident: i },
+    <i:Ident> => {
+        let name_id = interner.insert(&i);
+        Expr::Variable { ident: i, name_id, binding_id: BindingId(0) }
+    },
     "{" <args: Args> "}" => Expr::Tuple {val: args},
     "(" <Expr> ")" => <>,
     
     <expr:SubExpr> "(" <args:Args> ")" => 
         Expr::Call { func: Box::new(expr), args },
 
-    <s:Ident> "." <m:Ident> => Expr::MemberAccess { service: s, member: m },
+    <s:Ident> "." <m:Ident> => {
+        let service_id = interner.insert(&s);
+        let member_id = interner.insert(&m);
+        Expr::MemberAccess {
+            service: s,
+            service_id,
+            service_binding_id: BindingId(0),
+            member: m,
+            member_id,
+            member_binding_id: BindingId(0),
+        }
+    },
 
     "action" "{" <stmts: ActionStmts> "}" => Expr::Action(stmts),
 }
@@ -195,7 +225,10 @@ Expr: Expr = {
     "!" <e:Expr> => {
         Expr::Unop { expr: Box::new(e), op: UnOp::Not }
     },
-    <i: Ident> ":" <e: Expr> => Expr::KeyVal {key: i, value: Box::new(e)},
+    <i: Ident> ":" <e: Expr> => {
+        let key_id = interner.insert(&i);
+        Expr::KeyVal {key: i, key_id, key_binding_id: BindingId(0), value: Box::new(e)}
+    },
     
     
 
@@ -285,26 +318,41 @@ Expr: Expr = {
     },
 
     #[precedence(level="8")] #[assoc(side="left")]
-    "fn" <params:Params> "=>" <e:Expr> => 
-    Expr::Func {
-        params, body: Box::new(e)
+    "fn" <params:Params> "=>" <e:Expr> => {
+        let param_ids = params.iter().map(|p| (interner.insert(p), BindingId(0))).collect();
+        Expr::Func {
+            params, param_ids, body: Box::new(e)
+        }
     },
-    "select" <mut cols: (<Ident> ",")*> <c: Ident?> "from" <t: Ident> "where" <cond: Expr> => Expr::Select {
-        table_name: t,
-        column_names: {
-            let mut v = cols;
-            if let Some(col) = c { 
-                v.push(col); }
-            v
-        },
-        where_clause: Box::new(cond)
+    "select" <mut cols: (<Ident> ",")*> <c: Ident?> "from" <t: Ident> "where" <cond: Expr> => {
+        let mut column_names = cols;
+        if let Some(col) = c { 
+            column_names.push(col); 
+        }
+        let table_name_id = interner.insert(&t);
+        let column_ids = column_names.iter().map(|col| (interner.insert(col), BindingId(0))).collect();
+        Expr::Select {
+            table_name: t,
+            table_name_id,
+            table_binding_id: BindingId(0),
+            column_names,
+            column_ids,
+            where_clause: Box::new(cond)
+        }
     },
-    "fold" "(" <tn:Ident> "." <cn:Ident> "," <op:Expr> "," <id:Expr> ")" => 
-    Expr::Fold {
-        table_name: tn,
-        column_name: cn,
-        operation: Box::new(op),
-        identity: Box::new(id)
+    "fold" "(" <tn:Ident> "." <cn:Ident> "," <op:Expr> "," <id:Expr> ")" => {
+        let table_name_id = interner.insert(&tn);
+        let column_name_id = interner.insert(&cn);
+        Expr::Fold {
+            table_name: tn,
+            table_name_id,
+            table_binding_id: BindingId(0),
+            column_name: cn,
+            column_name_id,
+            column_binding_id: BindingId(0),
+            operation: Box::new(op),
+            identity: Box::new(id)
+        }
     }
 }
 

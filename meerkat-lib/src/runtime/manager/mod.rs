@@ -56,7 +56,7 @@ impl Manager {
 
         for decl in decls {
             match decl {
-                Decl::VarDecl { name, val } => {
+                Decl::VarDecl { name, val, .. } => {
                     let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name, txn: None }).await?;
                     env.push((name.clone(), value.clone()));
                     service.vars.insert(name, VarState::new(value));
@@ -549,6 +549,7 @@ impl Default for Manager {
 mod tests {
     use super::*;
     use crate::ast::{Decl, Expr, Value};
+    use crate::runtime::{Symbol, BindingId};
 
     #[tokio::test]
     async fn test_create_service_with_var() {
@@ -556,6 +557,8 @@ mod tests {
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Literal { val: Value::Number { val: 1 } },
             },
         ];
@@ -570,13 +573,17 @@ mod tests {
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Literal { val: Value::Number { val: 2 } },
             },
             Decl::DefDecl {
                 name: "f".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Binop {
                     op: crate::ast::BinOp::Add,
-                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                     expr2: Box::new(Expr::Literal { val: Value::Number { val: 3 } }),
                 },
                 is_pub: true,
@@ -602,13 +609,17 @@ mod tests {
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Literal { val: Value::Number { val: 1 } },
             },
             Decl::DefDecl {
                 name: "f".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Binop {
                     op: crate::ast::BinOp::Add,
-                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                     expr2: Box::new(Expr::Literal { val: Value::Number { val: 10 } }),
                 },
                 is_pub: true,
@@ -632,6 +643,8 @@ mod tests {
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 val: Expr::Literal { val: Value::Number { val: 0 } },
             },
         ];
@@ -647,9 +660,11 @@ mod tests {
         let stmts = vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Binop {
                     op: crate::ast::BinOp::Add,
-                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                     expr2: Box::new(Expr::Literal { val: Value::Number { val: 1 } }),
                 },
             },
@@ -667,9 +682,11 @@ mod tests {
         let stmts = vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Binop {
                     op: crate::ast::BinOp::Add,
-                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                     expr2: Box::new(Expr::Literal { val: Value::Number { val: 1 } }),
                 },
             },
@@ -687,6 +704,8 @@ mod tests {
         let stmts = vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Literal { val: Value::Number { val: 42 } },
             },
         ];
@@ -706,9 +725,11 @@ mod tests {
         let inner = Expr::Action(vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Binop {
                     op: crate::ast::BinOp::Add,
-                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string(), name_id: Symbol(0), binding_id: BindingId(0) }),
                     expr2: Box::new(Expr::Literal { val: Value::Number { val: 1 } }),
                 },
             },
@@ -733,6 +754,8 @@ mod tests {
         let stmts = vec![
             ActionStmt::Assign {
                 var: "x".to_string(),
+                name_id: Symbol(0),
+                binding_id: BindingId(0),
                 expr: Expr::Literal { val: Value::Number { val: 99 } },
             },
             ActionStmt::Assert(Expr::Literal { val: Value::Bool { val: false } }),

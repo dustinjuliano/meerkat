@@ -1,12 +1,12 @@
 """
 Meerkat Network Orchestrator
+Author: Dustin Juliano
 
 Purpose:
   Orchestrates and tests multi-node, relay, and multi-hop distributed topologies
-  for the Meerkat programming language. It dynamically parses a network manifest,
-  launches background server nodes, captures their runtime Peer IDs and service URLs,
-  wires dependent nodes together, runs client tests in the foreground, and performs
-  a clean shutdown of all background processes when completed.
+  for Meerkat. It dynamically parses a network manifest, launches background server nodes,
+  captures their runtime Peer IDs and service URLs, wires dependent nodes together, and
+  performs a clean shutdown of all background processes when completed.
 
 Usage:
   python3 scripts/run_network.py [manifest_file_path]
@@ -23,44 +23,111 @@ import signal
 import re
 import shutil
 import atexit
+from datetime import datetime
 
-# Run local loopback-only bindings by default via command line flags
+# Seconds to wait for process to terminate before sending SIGKILL
+TERMINATE_TIMEOUT = 5.0
+# Sleep interval (seconds) in the main monitoring loop to avoid high CPU usage
+MONITOR_POLL_INTERVAL = 0.25
+# Sleep interval (seconds) when polling a server node's log file during startup
+STARTUP_POLL_INTERVAL = 0.2
+# Maximum time (seconds) to wait for a node to print its Service URL
+NODE_STARTUP_TIMEOUT = 10.0
+# Maximum time (seconds) to allow client/test runner nodes to run before timing out
+# to prevent hangs. Does not affect server nodes
+CLIENT_NODE_TIMEOUT = 10.0
 
+# Session ID concept allows preserving logs from different runs of this tool
+SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+# Log paths. This is the root log directory for all sessions
 LOG_DIR = os.path.join("tmp", "logs")
-processes = []
+# Log path for a specific session
+LOG_DIR_SESSION = os.path.join(LOG_DIR, "mkn", SESSION_ID)
 
-def cleanup_processes():
-    global processes
+def exit_orchestrator(code, processes, reason=None):
+    """Logs the orchestrator's exit reason, cleans up child nodes, and exits the script."""
+    if not reason:
+        if code == 0:
+            reason = "Success (all nodes completed successfully)"
+        else:
+            reason = f"Failure (exited with code {code})"
+    print(f"\nOrchestrator exiting: {reason}")
+    cleanup_processes(processes)
+    sys.exit(code)
+
+def handle_exception(exc_type, exc_value, exc_traceback, processes):
+    """Intercepts unhandled runtime exceptions, prints the exit crash details, and triggers cleanup."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        reason = "Terminated by user (KeyboardInterrupt)"
+    else:
+        reason = f"Crashed due to unhandled exception: {exc_type.__name__}: {exc_value}"
+    print(f"\nOrchestrator exiting: {reason}")
+    cleanup_processes(processes)
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+def cleanup_processes(processes):
+    """Iterates over and cleanly shuts down all background server and client processes."""
     if not processes:
         return
     print("\nShutting down all Meerkat nodes...")
-    for node_name, proc in processes:
-        if proc.poll() is None:
-            print(f"Stopping server '{node_name}' (PID: {proc.pid})...")
+    for p in processes:
+        node_name = p["name"]
+        proc = p["proc"]
+        status = proc.poll()
+        if status is not None:
+            print(f"Node '{node_name}' (PID: {proc.pid}) has already exited with code {status}.")
+        else:
+            print(f"Stopping node '{node_name}' (PID: {proc.pid}) with terminate()...")
             try:
                 proc.terminate()
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            except Exception:
-                pass
-    processes = []
+                try:
+                    exit_code = proc.wait(timeout=TERMINATE_TIMEOUT)
+                    print(f"Node '{node_name}' (PID: {proc.pid}) stopped cleanly (Exit code: {exit_code}).")
+                except subprocess.TimeoutExpired:
+                    print(f"Warning: Node '{node_name}' (PID: {proc.pid}) did not terminate in time. Killing...")
+                    proc.kill()
+                    exit_code = proc.wait()
+                    print(f"Node '{node_name}' (PID: {proc.pid}) killed (Exit code: {exit_code}).")
+            except Exception as e:
+                print(f"Error: Failed to stop node '{node_name}' (PID: {proc.pid}): {e}", file=sys.stderr)
+    processes.clear()
     print("Cleanup complete.")
 
-def cleanup(sig=None, frame=None, exit_code=0):
-    if isinstance(sig, int):
+# Register signal handlers dynamically for clean exits
+def register_signals(processes):
+    """Dynamically configures handlers for termination signals supported by the current OS."""
+    def signal_handler(sig, frame):
+        """Handles incoming OS signals, prints the signal name, cleans up nodes, and exits."""
+        try:
+            sig_name = signal.Signals(sig).name
+        except Exception:
+            sig_name = f"Signal {sig}"
+        print(f"\nOrchestrator exiting: Terminated by signal: {sig_name}")
+        cleanup_processes(processes)
         sys.exit(128 + sig)
-    sys.exit(exit_code)
 
-# Register atexit handler to ensure processes are always killed
-atexit.register(cleanup_processes)
+    signals = ["SIGINT", "SIGTERM"]
+    if sys.platform == "win32":
+        signals.append("SIGBREAK")
+    else:
+        signals.extend(["SIGHUP", "SIGQUIT"])
 
-# Register signal handlers for clean exits
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
+    for sig_name in signals:
+        if hasattr(signal, sig_name):
+            try:
+                signal.signal(getattr(signal, sig_name), signal_handler)
+            except (ValueError, OSError):
+                pass
 
 def main():
-    global processes
+    """Entry point: registers exit hooks, parses the manifest, spawns nodes, and runs the monitoring loop."""
+    # Track processes that need to be cleaned up on exit
+    processes = []
+
+    # Register handlers meant to run once when the program starts
+    sys.excepthook = lambda t, v, tb: handle_exception(t, v, tb, processes)
+    atexit.register(cleanup_processes, processes)
+    register_signals(processes)
 
     # Parse arguments
     manifest_path = "scripts/default_manifest.mkn"
@@ -68,23 +135,24 @@ def main():
         if sys.argv[1] in ("-h", "--help"):
             print("Usage: python3 scripts/run_network.py [manifest_file_path]")
             print("Default manifest: scripts/default_manifest.mkn")
-            sys.exit(0)
+            exit_orchestrator(0, processes, "Displayed help menu")
         manifest_path = sys.argv[1]
 
     if not os.path.isfile(manifest_path):
         print(f"Error: Manifest file '{manifest_path}' not found.")
-        sys.exit(1)
+        exit_orchestrator(1, processes, f"Manifest file '{manifest_path}' not found")
 
-    # Clean and recreate log directory
-    if os.path.exists(LOG_DIR):
-        shutil.rmtree(LOG_DIR)
-    os.makedirs(LOG_DIR, exist_ok=True)
+    # Create session-based log directory with clients and servers subdirs
+    clients_log_dir = os.path.join(LOG_DIR_SESSION, "clients")
+    servers_log_dir = os.path.join(LOG_DIR_SESSION, "servers")
+    os.makedirs(clients_log_dir, exist_ok=True)
+    os.makedirs(servers_log_dir, exist_ok=True)
 
     print("===================================================")
     print("       Starting Meerkat Orchestrated Network       ")
     print("===================================================")
     print(f"Using manifest: {manifest_path}")
-    print(f"Logs will be written to: {LOG_DIR}/")
+    print(f"Logs will be written to: {LOG_DIR_SESSION}/")
     print("Offline/loopback mode is active (--local flag enabled)")
     print("---------------------------------------------------")
 
@@ -114,56 +182,68 @@ def main():
             for imp in [i.strip() for i in imports.split(',') if i.strip()]:
                 resolved_url = service_urls.get(imp)
                 if not resolved_url:
-                    url_file = os.path.join(LOG_DIR, f"{imp}.url")
+                    url_file = os.path.join(servers_log_dir, f"{imp}.url")
                     if os.path.exists(url_file):
                         with open(url_file, 'r') as uf:
                             resolved_url = uf.read().strip()
                 
                 if not resolved_url:
                     print(f"Error: Node '{node_name}' imports '{imp}', but '{imp}' has not been started yet.")
-                    cleanup(exit_code=1)
+                    exit_orchestrator(1, processes, f"Import resolution error for node '{node_name}'")
 
                 import_flags.extend(["-i", resolved_url])
 
-        log_file_path = os.path.join(LOG_DIR, f"{node_name}.log")
-
         if port.lower() == "client":
-            # Client Node (runs in foreground)
+            log_file_path = os.path.join(clients_log_dir, f"{node_name}.log")
+            # Client Node (runs in background)
             print(f"[{node_name}] Starting client node running '{file_path}'...")
             cmd = ["cargo", "run", "-p", "meerkat", "--", "--local", "-f", file_path] + import_flags
             print(f"Executing: {' '.join(cmd)}")
             print("---------------------------------------------------")
             
             try:
-                res = subprocess.run(cmd)
-                if res.returncode != 0:
-                    print(f"[{node_name}] Execution failed with code {res.returncode}. Output above.")
-                    sys.exit(res.returncode)
+                log_file = open(log_file_path, "w")
+                proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+                log_file.close()
+                processes.append({
+                    "name": node_name,
+                    "proc": proc,
+                    "is_client": True,
+                    "log_path": log_file_path
+                })
             except Exception as e:
                 print(f"[{node_name}] Execution failed: {e}")
-                sys.exit(1)
+                exit_orchestrator(1, processes, f"Client node '{node_name}' failed to execute: {e}")
         else:
+            log_file_path = os.path.join(servers_log_dir, f"{node_name}.log")
             # Server Node (runs in background)
             print(f"[{node_name}] Starting server node on port {port} running '{file_path}'...")
             cmd = ["cargo", "run", "-p", "meerkat", "--", "--local", "-s", "-f", file_path, "-p", port] + import_flags
             
             log_file = open(log_file_path, "w")
             proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True)
-            processes.append((node_name, proc))
+            log_file.close()
+            
+            processes.append({
+                "name": node_name,
+                "proc": proc,
+                "is_client": False,
+                "log_path": log_file_path
+            })
 
             # Wait for the node to print its Service URL
             print(f"Waiting for '{node_name}' to generate its URL...")
             url_found = False
             svc_url = None
             
-            for _ in range(100): # Up to 20 seconds
-                time.sleep(0.2)
+            iterations = int(NODE_STARTUP_TIMEOUT / STARTUP_POLL_INTERVAL)
+            for _ in range(iterations):
+                time.sleep(STARTUP_POLL_INTERVAL)
                 if proc.poll() is not None:
                     print(f"Error: Server '{node_name}' crashed during startup. Log output:")
-                    log_file.close()
                     with open(log_file_path, "r") as lf:
                         print(lf.read())
-                    cleanup(exit_code=1)
+                    exit_orchestrator(1, processes, f"Server '{node_name}' crashed during startup")
 
                 if os.path.exists(log_file_path):
                     with open(log_file_path, "r") as lf:
@@ -179,26 +259,74 @@ def main():
 
             if not url_found:
                 print(f"Error: Timeout waiting for server '{node_name}' to start. Log output:")
-                log_file.close()
                 with open(log_file_path, "r") as lf:
                     print(lf.read())
-                cleanup(exit_code=1)
+                exit_orchestrator(1, processes, f"Timeout waiting for server '{node_name}' to start")
 
-            log_file.close()
             service_urls[node_name] = svc_url
             
             # Save URL file for team integration
-            url_file_path = os.path.join(LOG_DIR, f"{node_name}.url")
+            url_file_path = os.path.join(servers_log_dir, f"{node_name}.url")
             with open(url_file_path, "w") as uf:
                 uf.write(svc_url)
                 
             print(f"[{node_name}] Started successfully! Service URL: {svc_url}\n")
 
+    # Run monitoring loop
+    active_clients = [p for p in processes if p["is_client"]]
+    if active_clients:
+        print(f"Monitoring running nodes (timeout: {CLIENT_NODE_TIMEOUT}s)...")
+    monitor_start_time = time.time()
+    
+    while active_clients:
+        time.sleep(MONITOR_POLL_INTERVAL)
+        
+        # Check for global node timeout to prevent hangs
+        if time.time() - monitor_start_time > CLIENT_NODE_TIMEOUT:
+            print(f"\nError: Node execution timed out after {CLIENT_NODE_TIMEOUT} seconds.")
+            for p in active_clients:
+                print(f"--- Log output for active client '{p['name']}' ---")
+                if os.path.exists(p["log_path"]):
+                    with open(p["log_path"], "r") as lf:
+                        print(lf.read())
+            exit_orchestrator(1, processes, f"Timeout after {CLIENT_NODE_TIMEOUT} seconds waiting for clients to complete")
+            
+        # Check for server crashes
+        for p in processes:
+            if not p["is_client"]:
+                status = p["proc"].poll()
+                if status is not None:
+                    # Server crashed!
+                    print(f"\nError: Server '{p['name']}' (PID: {p['proc'].pid}) exited unexpectedly with code {status}.")
+                    print(f"--- Log output for '{p['name']}' ---")
+                    if os.path.exists(p["log_path"]):
+                        with open(p["log_path"], "r") as lf:
+                            print(lf.read())
+                    exit_orchestrator(1, processes, f"Server '{p['name']}' exited unexpectedly")
+
+        # Check for client completion/failure
+        for p in list(active_clients):
+            status = p["proc"].poll()
+            if status is not None:
+                active_clients.remove(p)
+                
+                # Sequentially dump the log file content to stdout now that it's complete
+                print(f"\n--- Log output for client '{p['name']}' ---")
+                if os.path.exists(p["log_path"]):
+                    with open(p["log_path"], "r") as lf:
+                        print(lf.read())
+                print(f"--- End of log output for '{p['name']}' ---\n")
+                
+                if status == 0:
+                    print(f"[{p['name']}] Completed successfully.")
+                else:
+                    print(f"[{p['name']}] Failed with exit code {status}.")
+                    exit_orchestrator(status, processes, f"Client node '{p['name']}' failed")
+
     # If all nodes finished successfully
     print("\n===================================================")
     print("      All manifest nodes completed successfully     ")
     print("===================================================")
-    cleanup()
+    exit_orchestrator(0, processes, "Success (all nodes completed successfully)")
 
-if __name__ == "__main__":
-    main()
+main()

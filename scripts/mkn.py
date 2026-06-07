@@ -1,7 +1,7 @@
 """
 Meerkat Network Orchestrator (mkn)
 Usage:
-  python3 scripts/mkn.py manifest_file_path [--dump-state]
+  python3 scripts/mkn.py [manifest_file_path] [--clean] [--dump-state]
 
 Purpose:
   Orchestrates and tests multi-node, relay, and multi-hop distributed topologies
@@ -21,7 +21,33 @@ import atexit
 import queue
 import threading
 import json
+import shutil
 from datetime import datetime
+
+def purge_mkn_logs(clean: bool, log_dir_session: str = None, success: bool = False):
+    """Purges session log files or the entire mkn log directory.
+
+    If clean is True, it will completely purge the mkn log directory.
+    If success is True, it deletes only the logs from this specific session.
+    If success is False, the session logs are preserved for debugging.
+
+    Args:
+        clean: A boolean flag indicating whether to delete the entire log directory.
+        log_dir_session: The specific session directory path to remove on success.
+        success: A boolean flag indicating whether the run succeeded.
+    """
+    mkn_dir = os.path.join("tmp", "logs", "mkn")
+    if clean:
+        shutil.rmtree(mkn_dir, ignore_errors=True)
+        print("Purged entire log directory.")
+    elif success and log_dir_session:
+        shutil.rmtree(log_dir_session, ignore_errors=True)
+        # If the parent directory 'tmp/logs/mkn' is empty, delete it as well
+        if os.path.exists(mkn_dir) and not os.listdir(mkn_dir):
+            try:
+                os.rmdir(mkn_dir)
+            except OSError:
+                pass
 
 class Service:
     """Granular tracking of a discovered service in the network."""
@@ -262,14 +288,18 @@ def extract_peer_id(url: str) -> str:
 
 class NetworkOrchestrator:
     """Stateful manager of the test network."""
-    def __init__(self, manifest: Manifest):
-        """
-        Initializes the orchestrator, directory structures, and Node models.
-        
+    def __init__(self, manifest: Manifest, clean: bool = False):
+        """Initializes the network orchestrator state, directories, and node models.
+
         Args:
             manifest: A validated Manifest configuration instance.
+            clean: A boolean flag indicating whether the entire mkn log directory
+                should be purged on exit.
         """
         self.manifest = manifest
+        self.clean = clean
+        self.success = False
+        self._cleaned_up = False
         self.nodes_by_alias = {} # Dict[alias, Node]
         self.nodes_by_peer_id = {} # Dict[peer_id, Node]
         
@@ -555,12 +585,18 @@ class NetworkOrchestrator:
         print(f"--- End of log output for '{node.alias}' ---\n")
 
     def run(self):
-        """
-        Starts the orchestration main loop, checking for dependency resolution
-        and process completions, and returns the final exit code.
-        
+        """Starts the orchestration main loop and handles network lifecycle.
+
+        This method enters a polling loop where it resolves dependencies, spawns
+        nodes, collects process output, and monitors status. If client nodes are
+        configured, it waits for all client nodes to complete.
+
+        Args:
+            None.
+
         Returns:
-            0 if all clients complete successfully, or non-zero client exit code on failure.
+            int: 0 if all client nodes exit successfully (exit code 0), or the
+                exit code of the first failing client node.
         """
         print("===================================================")
         print("       Starting Meerkat Orchestrated Network       ")
@@ -588,6 +624,7 @@ class NetworkOrchestrator:
                         print("\n===================================================")
                         print("      All nodes ran successfully     ")
                         print("===================================================")
+                        self.success = True
                         return 0
             else:
                 pass
@@ -612,35 +649,53 @@ class NetworkOrchestrator:
         print("--- END STATE DUMP ---")
 
     def cleanup(self):
+        """Terminates spawned background processes and cleans up temporary files and logs.
+
+        This method terminates all active subprocesses registered under the orchestrator.
+        It also removes Python cache directories and, depending on the error state
+        and cleanup options, deletes session or general log subdirectories.
+        
+        Note:
+            If the orchestrator is terminated with a SIGKILL signal, this cleanup routine
+            will be bypassed and temporary files/logs will remain on disk.
+
+        Args:
+            None.
+
+        Returns:
+            None.
         """
-        Performs clean terminate() and kill() on all spawned background processes
-        to ensure no ghost/zombie nodes remain on the system.
-        """
-        if not self.nodes_by_alias:
+        if self._cleaned_up:
             return
-        print("\nShutting down all Meerkat nodes...")
-        for node in self.nodes_by_alias.values():
-            if node.proc:
-                proc = node.proc
-                status = proc.poll()
-                if status is not None:
-                    print(f"Node '{node.alias}' (PID: {proc.pid}) has already exited with code {status}.")
-                else:
-                    print(f"Stopping node '{node.alias}' (PID: {proc.pid}) with terminate()...")
-                    try:
-                        proc.terminate()
+        self._cleaned_up = True
+
+        if self.nodes_by_alias:
+            print("\nShutting down all Meerkat nodes...")
+            for node in self.nodes_by_alias.values():
+                if node.proc:
+                    proc = node.proc
+                    status = proc.poll()
+                    if status is not None:
+                        print(f"Node '{node.alias}' (PID: {proc.pid}) has already exited with code {status}.")
+                    else:
+                        print(f"Stopping node '{node.alias}' (PID: {proc.pid}) with terminate()...")
                         try:
-                            exit_code = proc.wait(timeout=self.terminate_timeout)
-                            print(f"Node '{node.alias}' (PID: {proc.pid}) stopped cleanly (Exit code: {exit_code}).")
-                        except subprocess.TimeoutExpired:
-                            print(f"Warning: Node '{node.alias}' (PID: {proc.pid}) did not terminate in time. Killing...")
-                            proc.kill()
-                            exit_code = proc.wait()
-                            print(f"Node '{node.alias}' (PID: {proc.pid}) killed (Exit code: {exit_code}).")
-                    except Exception as e:
-                        print(f"Error: Failed to stop node '{node.alias}' (PID: {proc.pid}): {e}", file=sys.stderr)
-        self.nodes_by_alias.clear()
-        print("Cleanup complete.")
+                            proc.terminate()
+                            try:
+                                exit_code = proc.wait(timeout=self.terminate_timeout)
+                                print(f"Node '{node.alias}' (PID: {proc.pid}) stopped cleanly (Exit code: {exit_code}).")
+                            except subprocess.TimeoutExpired:
+                                print(f"Warning: Node '{node.alias}' (PID: {proc.pid}) did not terminate in time. Killing...")
+                                proc.kill()
+                                exit_code = proc.wait()
+                                print(f"Node '{node.alias}' (PID: {proc.pid}) killed (Exit code: {exit_code}).")
+                        except Exception as e:
+                            print(f"Error: Failed to stop node '{node.alias}' (PID: {proc.pid}): {e}", file=sys.stderr)
+            self.nodes_by_alias.clear()
+            print("Cleanup complete.")
+
+        # Handle log directories cleanup
+        purge_mkn_logs(clean=self.clean, log_dir_session=self.log_dir_session, success=self.success)
 
 def main():
     """
@@ -679,10 +734,20 @@ Manifest file format (JSON):
   }
 """
     )
-    parser.add_argument("manifest_file_path", help="Path to the JSON network manifest file")
+    parser.add_argument("manifest_file_path", nargs="?", help="Path to the JSON network manifest file")
+    parser.add_argument("--clean", action="store_true", help="Purge the entire mkn log subdirectory on exit (can be run without a manifest)")
     parser.add_argument("--dump-state", action="store_true", help="Dump internal registry state on exit")
     args = parser.parse_args()
     
+    # Handle standalone or early clean flag check
+    if not args.manifest_file_path:
+        if args.clean:
+            purge_mkn_logs(clean=True)
+            print("Cleanup completed.")
+            sys.exit(0)
+        else:
+            parser.error("the following arguments are required: manifest_file_path")
+            
     if not os.path.isfile(args.manifest_file_path):
         print(f"Error: Manifest file '{args.manifest_file_path}' not found.")
         sys.exit(1)
@@ -694,7 +759,7 @@ Manifest file format (JSON):
         print(f"Pre-flight validation failed: {e}")
         sys.exit(1)
         
-    orchestrator = NetworkOrchestrator(manifest)
+    orchestrator = NetworkOrchestrator(manifest, clean=args.clean)
     
     def exception_hook(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):
@@ -716,6 +781,10 @@ Manifest file format (JSON):
         orchestrator.cleanup()
         sys.exit(128 + sig)
         
+    # Register signal handlers for clean termination.
+    # Note: SIGKILL cannot be caught by Python, meaning any forced kill
+    # bypasses these signal handlers and the atexit cleanup logic, leaving
+    # logs and pycache on disk.
     signals = ["SIGINT", "SIGTERM"]
     if sys.platform == "win32":
         signals.append("SIGBREAK")

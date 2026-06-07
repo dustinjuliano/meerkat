@@ -41,6 +41,10 @@ def run_cmd(args, timeout=30):
         print(f"\nFAIL: Command timed out after {timeout} seconds: {' '.join(args)}")
         
         # Terminate the entire process tree to prevent orphans
+        # Note: Using SIGKILL or taskkill /F bypasses the target process's atexit
+        # and cleanup handlers. Consequently, any temporary files, logs, or
+        # pycache directories created by the child process will remain on disk.
+        # This is the desired outcome, as those logs likely need to be inspected.
         if is_windows:
             try:
                 subprocess.run(

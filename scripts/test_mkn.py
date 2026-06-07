@@ -4,32 +4,37 @@ import sys
 import re
 
 def run_cmd(args, timeout=30):
-    """Runs a subprocess command with a timeout.
+    """Runs a subprocess command with a timeout, redirecting stderr to stdout.
 
     Args:
         args: A list of program arguments to execute.
         timeout: Maximum duration in seconds to wait for execution.
 
     Returns:
-        A tuple of (returncode, stdout, stderr). On timeout, returncode is -1
-        and stdout/stderr contain any output captured before termination.
+        A tuple of (returncode, output), where:
+          - returncode: The exit code of the subprocess, or -1 on timeout.
+          - output: The combined stdout and stderr of the process.
     """
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        return proc.returncode, proc.stdout, proc.stderr
+        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
+        return proc.returncode, proc.stdout
     except subprocess.TimeoutExpired as e:
         print(f"\nFAIL: Command timed out after {timeout} seconds: {' '.join(args)}")
-        return -1, (e.stdout or b"").decode(errors="replace"), (e.stderr or b"").decode(errors="replace")
+        stdout_decoded = e.stdout
+        if isinstance(stdout_decoded, bytes):
+            stdout_decoded = stdout_decoded.decode(errors="replace")
+        elif stdout_decoded is None:
+            stdout_decoded = ""
+        return -1, stdout_decoded
 
 def run_basic_test():
     """Runs integration test 1 (mkn_basic_topology) to verify a basic orchestrator setup."""
     print("Running Test 1: mkn_basic_topology...")
-    code, stdout, stderr = run_cmd([
+    code, output = run_cmd([
         sys.executable, "scripts/mkn.py", "meerkat/tests/mkn/test_mkn_basic.json"
     ])
     
-    print(stdout)
-    print(stderr)
+    print(output)
     
     if code != 0:
         print("FAIL: Basic topology test exited with code", code)
@@ -38,7 +43,7 @@ def run_basic_test():
     # Check that basic_server finished successfully (was shutdown)
     # Check that the logs of basic_server contain "All services online."
     # Since they are printed to stdout, we can search the output.
-    if "All services online." not in stdout:
+    if "All services online." not in output:
         print("FAIL: Expected 'All services online.' marker in orchestrator output")
         return False
         
@@ -48,12 +53,11 @@ def run_basic_test():
 def run_namespace_split_test():
     """Runs integration test 2 (mkn_namespace_split) to verify three-namespace tracking and gateway routing."""
     print("\nRunning Test 2: mkn_namespace_split...")
-    code, stdout, stderr = run_cmd([
+    code, output = run_cmd([
         sys.executable, "scripts/mkn.py", "meerkat/tests/mkn/test_mkn_gateway.json", "--dump-state"
     ])
     
-    print(stdout)
-    print(stderr)
+    print(output)
     
     if code != 0:
         print("FAIL: Namespace split test exited with code", code)
@@ -62,11 +66,11 @@ def run_namespace_split_test():
     # Extract state dump
     marker_start = "--- STATE DUMP ---"
     marker_end = "--- END STATE DUMP ---"
-    if marker_start not in stdout or marker_end not in stdout:
+    if marker_start not in output or marker_end not in output:
         print("FAIL: State dump not found in output")
         return False
         
-    state_str = stdout.split(marker_start)[1].split(marker_end)[0].strip()
+    state_str = output.split(marker_start)[1].split(marker_end)[0].strip()
     try:
         state = json.loads(state_str)
     except Exception as e:
@@ -133,16 +137,16 @@ def run_validation_failure_test():
     
     for name, filename, expected_error in test_cases:
         filepath = f"meerkat/tests/mkn/{filename}"
-        code, stdout, stderr = run_cmd([sys.executable, "scripts/mkn.py", filepath])
+        code, output = run_cmd([sys.executable, "scripts/mkn.py", filepath])
         
         if code == 0:
             print(f"FAIL: Expected non-zero code for {name}")
-            print(f"Actual output: {stdout.strip()}")
+            print(f"Actual output: {output.strip()}")
             return False
             
-        if expected_error not in stdout:
+        if expected_error not in output:
             print(f"FAIL: Expected validation error regarding '{expected_error}'")
-            print(f"Actual output: {stdout.strip()}")
+            print(f"Actual output: {output.strip()}")
             return False
             
         print(f"PASS: {name} check")

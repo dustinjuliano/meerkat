@@ -69,6 +69,10 @@ pub enum MeerkatMessage {
         service: String,
         member: String,
         reply_to: String,  // full multiaddr of the requester
+        /// When Some, the read joins this transaction: the owning node acquires
+        /// and holds a read lock under the shared id until commit/abort. When
+        /// None, it is a plain unlocked read.
+        txn_id: Option<crate::runtime::txn::TxnId>,
     },
 
     /// Response to a LookupRequest with the serialized value

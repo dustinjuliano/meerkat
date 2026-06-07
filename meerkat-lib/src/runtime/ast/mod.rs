@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use crate::net::ServiceId;
 //use crate::runtime::Manager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -72,7 +73,10 @@ pub enum Value {
     ActionClosure {
         stmts: Vec<ActionStmt>,
         env: Vec<(String, Value)>,
-        service_name: String,
+        /// Identity of the service this action belongs to. Carries the owning
+        /// node's address, so the action can be executed even if its service is
+        /// not imported into the scope where the closure is later used.
+        service: ServiceId,
     },
 }
 
@@ -209,8 +213,8 @@ impl Display for Value {
             Value::String { val } => write!(f, "\"{}\"", val),
             Value::Closure { params, body, env, service_name } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
-            Value::ActionClosure { stmts, env, service_name } =>
-                write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
+            Value::ActionClosure { stmts, env, service } =>
+                write!(f, "action[{:?}][{}]{{{:?}}}", env, service.0, stmts),  
         }
     }
 }

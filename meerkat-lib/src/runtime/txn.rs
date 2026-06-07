@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
 use crate::runtime::ast::Value;
 use crate::net::{ServiceId, Address};
@@ -21,7 +22,9 @@ use crate::net::{ServiceId, Address};
 /// transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxnId {
-    /// Wall-clock creation time as nanoseconds since the Unix epoch.
+    /// Creation time as nanoseconds since the Unix epoch, used as a logical
+    /// clock: monotonically increasing per node so two transactions minted in
+    /// the same wall-clock tick still get distinct ids.
     pub timestamp: u128,
     /// (Probabilistically) unique identifier of the originating node.
     pub node_id: u64,
@@ -29,13 +32,29 @@ pub struct TxnId {
     pub iteration: u32,
 }
 
+/// Last nanosecond timestamp handed out as a TxnId on this process. Acts as a
+/// logical clock: if the wall clock has not advanced past it, we bump by one so
+/// two transactions in the same tick still get distinct (and ordered) ids. This
+/// guarantees uniqueness on a node, which matters because TxnId aliases lock
+/// owners and keys participant-held transaction state.
+static LAST_TXN_NANOS: Mutex<u128> = Mutex::new(0);
+
 impl TxnId {
-    /// Create a new transaction id originating from the given node.
+    /// Create a new, node-unique transaction id originating from the given node.
     pub fn new(node_id: u64) -> Self {
-        let timestamp = SystemTime::now()
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
+        // Claim a timestamp strictly greater than any previously issued one,
+        // even if the clock repeated or went backwards. A clock error (now == 0)
+        // can no longer cause a collision because we still take last + 1.
+        let timestamp = {
+            let mut last = LAST_TXN_NANOS.lock().unwrap_or_else(|e| e.into_inner());
+            let ts = now.max(*last + 1);
+            *last = ts;
+            ts
+        };
         TxnId { timestamp, node_id, iteration: 0 }
     }
 

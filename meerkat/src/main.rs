@@ -113,6 +113,9 @@ async fn run_server(prog: Vec<Stmt>, remote_url_map: std::collections::HashMap<S
 
     // Wire network into manager so server can also do remote lookups
     manager.network = Some(net);
+    // Record the canonical address so service identities are stable and match
+    // the advertised Service URLs above.
+    manager.set_local_address(full_addr.clone());
 
     // Load services after network and remote services are ready,
     // so that remote lookups during service initialization work correctly
@@ -132,8 +135,13 @@ async fn run_server(prog: Vec<Stmt>, remote_url_map: std::collections::HashMap<S
             match event {
                 NetworkEvent::MessageReceived { peer: _, msg } => {
                     match msg {
-                        MeerkatMessage::LookupRequest { request_id, service, member, reply_to } => {
-                            let result = manager.lookup(&member, &service, None).await;
+                        MeerkatMessage::LookupRequest { request_id, service, member, reply_to, txn_id } => {
+                            // Transactional read: acquire and hold a read lock
+                            // under the shared id. Plain read otherwise.
+                            let result = match txn_id {
+                                Some(tid) => manager.remote_read_participant(&service, &member, tid).await,
+                                None => manager.lookup(&member, &service, None).await,
+                            };
                             let response = match result {
                                 Ok(val) => MeerkatMessage::LookupResponse {
                                     request_id,
@@ -212,17 +220,31 @@ async fn run_client(
 
     // Start network if we have remote imports
     let mut net: Option<NetworkActor> = None;
+    let mut local_full_addr: Option<String> = None;
     if !remote_url_map.is_empty() {
         let mut n = NetworkActor::new(NodeType::Server).await
             .map_err(|e| format!("Network error: {}", e))?;
         let listen_addr = Address::new("/ip4/0.0.0.0/tcp/0");
-        n.handle_command(NetworkCommand::Listen { addr: listen_addr }).await;
+        let reply = n.handle_command(NetworkCommand::Listen { addr: listen_addr }).await;
+        if let meerkat_lib::net::NetworkReply::ListenSuccess { addr } = reply {
+            let public_ip = meerkat_lib::runtime::Manager::get_public_ip();
+            let peer_id = n.local_peer_id();
+            let addr_str = addr.0
+                .replace("0.0.0.0", &public_ip)
+                .replace("127.0.0.1", &public_ip);
+            local_full_addr = Some(format!("{}/p2p/{}", addr_str, peer_id));
+        }
         net = Some(n);
     }
 
     // Wire network actor into manager
     if let Some(n) = net {
         manager.network = Some(n);
+    }
+    // Record the canonical address (if networked) so service identities are
+    // stable for the life of the process.
+    if let Some(addr) = local_full_addr {
+        manager.set_local_address(addr);
     }
 
     for stmt in &prog {

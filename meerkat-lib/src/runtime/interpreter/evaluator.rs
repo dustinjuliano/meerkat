@@ -146,7 +146,10 @@ pub async fn eval(
             Ok(Value::ActionClosure {
                 stmts: stmts.clone(),
                 env: captured_env,
-                service_name: ctx.service_name.to_string(),
+                // Stamp the action with its owning service's identity (which
+                // embeds this node's address), so it stays executable wherever
+                // the closure travels.
+                service: ctx.manager.id_for_service(ctx.service_name),
             })
         }
 

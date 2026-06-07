@@ -33,6 +33,11 @@ pub struct Manager {
     /// by a remote originator, executed under a shared id and held (locks +
     /// buffered writes) until a Commit or Abort arrives.
     pub pending_txns: HashMap<TxnId, Transaction>,
+    /// This node's canonical, dialable address, set once after the network is
+    /// listening. Service identities are derived from it, so they are stable for
+    /// the life of the process (never empty-then-populated) and match the URL
+    /// under which the node advertises its services.
+    local_address: Option<String>,
 }
 
 impl Manager {
@@ -44,18 +49,26 @@ impl Manager {
             pending_replies: HashMap::new(),
             node_id: Self::random_node_id(),
             pending_txns: HashMap::new(),
+            local_address: None,
         }
+    }
+
+    /// Record this node's canonical address once the network is listening, so
+    /// service identities are stable and consistent with the advertised URL.
+    pub fn set_local_address(&mut self, addr: String) {
+        self.local_address = Some(addr);
     }
 
     /// Compute the global identity of a service owned by this node. When the
     /// node has a network address, the identity is that address plus the service
     /// slug; otherwise it falls back to the bare name for local-only execution.
-    async fn service_identity(&mut self, name: &str) -> ServiceId {
-        let addr = self.local_reply_addr().await;
-        if addr.is_empty() {
-            ServiceId::new(name)
-        } else {
-            ServiceId::new(format!("{}/{}", addr, name))
+    fn service_identity(&self, name: &str) -> ServiceId {
+        match &self.local_address {
+            Some(addr) if !addr.is_empty() => ServiceId::new(format!("{}/{}", addr, name)),
+            // No network address: fall back to the bare name. On a single node
+            // names are unambiguous, and because local_address is fixed at
+            // startup this choice never changes mid-run.
+            _ => ServiceId::new(name),
         }
     }
 
@@ -64,7 +77,7 @@ impl Manager {
     {
         let dep = calc_dep_srv(&decls);
 
-        let id = self.service_identity(&name).await;
+        let id = self.service_identity(&name);
         let mut service = Service {
             id,
             name: name.clone(),
@@ -102,7 +115,7 @@ impl Manager {
     pub async fn lookup(&mut self, ident: &str, service_name: &str, mut txn: Option<&mut Transaction>) -> Result<Value, EvalError> {
         // Check if service is remote
         if self.remote_services.contains_key(service_name) {
-            return self.remote_lookup(service_name, ident).await;
+            return self.remote_lookup(service_name, ident, txn).await;
         }
 
         // If it's a def, re-evaluate from stored expression for freshness.
@@ -191,10 +204,11 @@ impl Manager {
         }
 
         // propagate: re-evaluate defs that depend on this var in topo order
-        self.propagate(service_name, var).await
+        self.propagate(service_name, var).await;
+        Ok(())
     }
 
-    async fn propagate(&mut self, service_name: &str, changed_var: &str) -> Result<(), EvalError> {
+    async fn propagate(&mut self, service_name: &str, changed_var: &str) {
         // collect defs that need re-evaluation in topo order
         let topo_order: Vec<String> = self.services
             .get(service_name)
@@ -226,7 +240,15 @@ impl Manager {
                         .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect())
                         .unwrap_or_default();
 
-                    let value = eval(&expr, &env, &mut EvalContext { manager: self, service_name, txn: None }).await?;
+                    let value = match eval(&expr, &env, &mut EvalContext { manager: self, service_name, txn: None }).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // Propagation is best-effort; durable retry of failed
+                            // updates is tracked under issue #24 (async updates).
+                            log::warn!("propagation of def '{}' failed: {}", def_name, e);
+                            continue;
+                        }
+                    };
 
                     if let Some(service) = self.services.get_mut(service_name) {
                         if let Some(var_state) = service.vars.get_mut(&def_name) {
@@ -236,7 +258,6 @@ impl Manager {
                 }
             }
         }
-        Ok(())
     }
 
 
@@ -325,6 +346,9 @@ impl Manager {
     /// Get our local address with peer ID for use as reply_to
     /// Replaces loopback/unspecified with the actual outbound IP
     async fn local_reply_addr(&mut self) -> String {
+        if let Some(addr) = &self.local_address {
+            return addr.clone();
+        }
         let net = match self.network.as_mut() {
             Some(n) => n,
             None => return String::new(),
@@ -372,19 +396,45 @@ impl Manager {
             .unwrap_or_else(|_| "127.0.0.1".to_string())
     }
 
-    pub async fn remote_lookup(&mut self, service: &str, member: &str) -> Result<Value, EvalError> {
+    pub async fn remote_lookup(&mut self, service: &str, member: &str, mut txn: Option<&mut Transaction>) -> Result<Value, EvalError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        // The remote service's advertised URL is its ServiceId; key this
+        // transaction's read cache and lock tracking by (that id, member).
+        let remote_sid = ServiceId::new(
+            self.remote_services.get(service).map(|a| a.0.clone())
+                .unwrap_or_else(|| service.to_string())
+        );
+        let key = (remote_sid, member.to_string());
+
+        // Serve a cached read if this transaction already read this member.
+        if let Some(t) = txn.as_deref() {
+            if let Some(v) = t.read_cache.get(&key) {
+                return Ok(v.clone());
+            }
+        }
 
         let addr = self.remote_addr(service)?;
         let request_id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         let reply_to = self.local_reply_addr().await;
+        let shared_tid = txn.as_ref().map(|t| t.id.clone());
+
+        // Inside a transaction, the owning node will acquire and hold a read lock
+        // under the shared id. Pre-register it as a participant so commit/abort
+        // releases that lock even if the reply is lost.
+        if shared_tid.is_some() {
+            if let Some(t) = txn.as_deref_mut() {
+                t.participants.insert(addr.clone());
+            }
+        }
 
         let msg = MeerkatMessage::LookupRequest {
             request_id,
             service: service.to_string(),
             member: member.to_string(),
             reply_to,
+            txn_id: shared_tid,
         };
 
         let reply = self.send_and_await_reply(
@@ -396,6 +446,9 @@ impl Manager {
             MeerkatMessage::LookupResponse { value, .. } => {
                 let val: Value = serde_json::from_str(&value)
                     .map_err(|e| EvalError::NetworkError(e.to_string()))?;
+                if let Some(t) = txn.as_deref_mut() {
+                    t.read_cache.insert(key, val.clone());
+                }
                 Ok(val)
             }
             MeerkatMessage::LookupError { error, .. } => {
@@ -405,11 +458,35 @@ impl Manager {
         }
     }
 
-    pub async fn remote_action(&mut self, service: &str, stmts: Vec<ActionStmt>, env: Vec<(String, Value)>, txn: Option<&mut Transaction>) -> Result<(), EvalError> {
+    /// Participant side: serve a transactional remote read by acquiring and
+    /// holding a read lock on the member under the shared transaction id (kept
+    /// in pending_txns until commit/abort), accumulating into any state this
+    /// node already prepared for the same transaction.
+    pub async fn remote_read_participant(&mut self, service: &str, member: &str, tid: TxnId) -> Result<Value, EvalError> {
+        let mut txn = self.pending_txns.remove(&tid)
+            .unwrap_or_else(|| Transaction::new(tid.clone()));
+        match self.lookup(member, service, Some(&mut txn)).await {
+            Ok(v) => {
+                self.pending_txns.insert(tid, txn);
+                Ok(v)
+            }
+            Err(e) => {
+                // Could not acquire the read lock (e.g. conflict): release any
+                // locks taken and do not keep this transaction prepared.
+                self.release_locks(&txn.locked, &txn.id);
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn remote_action(&mut self, service_id: &ServiceId, stmts: Vec<ActionStmt>, env: Vec<(String, Value)>, mut txn: Option<&mut Transaction>) -> Result<(), EvalError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ACTION_ID: AtomicU64 = AtomicU64::new(1);
 
-        let addr = self.remote_addr(service)?;
+        // Dial the node address embedded in the ServiceId; send the slug as the
+        // service name the remote node uses to find its local service. This works
+        // even if the service was never imported into the current scope (#40).
+        let (addr, slug) = Self::split_service_id(service_id);
         let request_id = NEXT_ACTION_ID.fetch_add(1, Ordering::SeqCst);
         let reply_to = self.local_reply_addr().await;
 
@@ -418,9 +495,20 @@ impl Manager {
         // commit/abort. Standalone (no txn) keeps the old commit-immediately path.
         let shared_tid = txn.as_ref().map(|t| t.id.clone());
 
+        // Pre-register the participant BEFORE sending. If the request times out
+        // or the response is lost after the remote already prepared and grabbed
+        // locks, the originator's abort path still iterates txn.participants and
+        // reaches this node to release them. If the remote never received the
+        // request, the Abort it gets is a harmless no-op.
+        if shared_tid.is_some() {
+            if let Some(t) = txn.as_deref_mut() {
+                t.participants.insert(addr.clone());
+            }
+        }
+
         let msg = MeerkatMessage::ActionRequest {
             request_id,
-            service: service.to_string(),
+            service: slug.clone(),
             stmts,
             env,
             reply_to,
@@ -429,16 +517,13 @@ impl Manager {
 
         let reply = self.send_and_await_reply(
             addr.clone(), msg, request_id,
-            format!("Timeout waiting for remote action on service '{}'", service),
+            format!("Timeout waiting for remote action on service '{}'", slug),
         ).await?;
 
         match reply {
             MeerkatMessage::ActionResponse { success, error, .. } => {
                 if success {
-                    // Record this node as a participant so we can commit/abort it.
-                    if let Some(t) = txn {
-                        t.participants.insert(addr);
-                    }
+                    // Participant already registered above; nothing more to do.
                     Ok(())
                 } else {
                     Err(EvalError::NetworkError(
@@ -450,10 +535,13 @@ impl Manager {
         }
     }
 
-    /// Resolve an in-scope service name to its global ServiceId. For a known
-    /// local service this is its stored id; otherwise it falls back to a
-    /// name-based id (used until remote service identities are wired up).
-    fn id_for_service(&self, service_name: &str) -> ServiceId {
+    /// Resolve an in-scope service name to its global ServiceId. Callers only
+    /// resolve names of local services here (remote reads and actions are routed
+    /// before reaching this), so this returns the service's stored, stable id.
+    /// The bare-name fallback is a defensive default for an unknown name and is
+    /// not used for genuine remote services, whose identities travel embedded in
+    /// their ActionClosures.
+    pub fn id_for_service(&self, service_name: &str) -> ServiceId {
         self.services.get(service_name)
             .map(|s| s.id.clone())
             .unwrap_or_else(|| ServiceId::new(service_name))
@@ -465,8 +553,19 @@ impl Manager {
     }
 
     /// Find the in-scope name of a local service from its ServiceId.
-    fn name_for_id(&self, id: &ServiceId) -> Option<String> {
+    pub fn name_for_id(&self, id: &ServiceId) -> Option<String> {
         self.services.iter().find(|(_, s)| &s.id == id).map(|(n, _)| n.clone())
+    }
+
+    /// Split a service identity into the dialable node address and the service
+    /// slug (its trailing name segment). Lets remote_action use the address
+    /// embedded in an ActionClosure's ServiceId rather than requiring the
+    /// service to be imported into the current scope.
+    fn split_service_id(id: &ServiceId) -> (Address, String) {
+        match id.0.rfind('/') {
+            Some(i) => (Address::new(&id.0[..i]), id.0[i + 1..].to_string()),
+            None => (Address::new(String::new()), id.0.clone()),
+        }
     }
 
     /// Try to acquire a write lock on a service variable.
@@ -564,24 +663,18 @@ impl Manager {
             }
         }
 
-        // Commit locally — apply buffered writes and propagate. On execution
-        // error nothing is applied, so a failed transaction leaves no partial
-        // writes. Then coordinate participants (two-phase: they already executed
-        // and are holding, so this is the commit/abort decision).
-        let mut commit_error: Option<EvalError> = None;
+        // The commit/abort decision depends only on whether execution
+        // succeeded. Once execution succeeds the writes are applied and become
+        // visible, so commit messaging to participants is best-effort and never
+        // turns a successful transaction into a failed one (commit retries are
+        // tracked separately under issue #54).
         if exec_error.is_none() {
-            commit_error = self.apply_committed_writes(&txn).await.err();
-        }
-
-        if exec_error.is_none() && commit_error.is_none() {
-            // Tell every participant to commit its buffered writes.
+            self.apply_committed_writes(&txn).await;
             for addr in txn.participants.iter().cloned().collect::<Vec<_>>() {
-                if let Err(e) = self.send_commit(addr, &txn.id).await {
-                    commit_error = Some(e);
-                }
+                let _ = self.send_commit(addr, &txn.id).await;
             }
         } else {
-            // Roll back: tell every participant to abort and discard its writes.
+            // Execution failed: discard buffered writes and abort participants.
             for addr in txn.participants.iter().cloned().collect::<Vec<_>>() {
                 self.send_abort(addr, &txn.id).await;
             }
@@ -590,7 +683,7 @@ impl Manager {
         // Release all locks held locally (always, even on error)
         self.release_locks(&txn.locked, &txn.id);
 
-        match exec_error.or(commit_error) {
+        match exec_error {
             Some(e) => Err(e),
             None => Ok(()),
         }
@@ -599,7 +692,9 @@ impl Manager {
     /// Apply a transaction's buffered writes to the owning services, record the
     /// writing transaction, and propagate to dependent defs. Shared by local
     /// commit and by a participant committing on a remote Commit message.
-    async fn apply_committed_writes(&mut self, txn: &Transaction) -> Result<(), EvalError> {
+    /// Infallible: once we are applying writes the transaction is committed, so
+    /// there is no going back. Propagation is best-effort (retries: issue #24).
+    async fn apply_committed_writes(&mut self, txn: &Transaction) {
         let writes: Vec<((ServiceId, String), Value)> = txn.written.iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -615,10 +710,9 @@ impl Manager {
         // Propagate after all writes are applied so defs see a consistent state.
         for ((sid, var), _) in &writes {
             if let Some(name) = self.name_for_id(sid) {
-                self.propagate(&name, var).await?;
+                self.propagate(&name, var).await;
             }
         }
-        Ok(())
     }
 
     /// Participant side: execute a composed action under a shared transaction id
@@ -631,7 +725,13 @@ impl Manager {
         initial_env: &[(String, Value)],
         tid: TxnId,
     ) -> Result<(), EvalError> {
-        let mut txn = Transaction::new(tid.clone());
+        // Reuse an already-prepared transaction for this id if this node was
+        // already touched by the same distributed transaction (two services on
+        // one host, or transitive re-entry); otherwise start fresh. Pulling it
+        // out of pending_txns gives ownership so we can borrow &mut self below,
+        // and lets repeated actions accumulate into one prepared state.
+        let mut txn = self.pending_txns.remove(&tid)
+            .unwrap_or_else(|| Transaction::new(tid.clone()));
         let mut env: Vec<(String, Value)> = initial_env.to_vec();
         let mut exec_error: Option<EvalError> = None;
         for stmt in stmts {
@@ -642,11 +742,13 @@ impl Manager {
             }
         }
         if let Some(e) = exec_error {
-            // Execution failed: release any locks acquired; nothing to hold.
+            // Execution failed: release all locks held by this (possibly merged)
+            // transaction; do not keep it prepared. The originator's abort for
+            // this tid will then be a safe no-op here.
             self.release_locks(&txn.locked, &txn.id);
             return Err(e);
         }
-        // Prepared: hold locks and buffered writes until commit/abort.
+        // Prepared: hold the accumulated locks and buffered writes until commit/abort.
         self.pending_txns.insert(tid, txn);
         Ok(())
     }
@@ -654,11 +756,13 @@ impl Manager {
     /// Participant side: apply and release a held transaction on Commit.
     pub async fn commit_participant(&mut self, tid: &TxnId) -> Result<(), EvalError> {
         if let Some(txn) = self.pending_txns.remove(tid) {
-            let res = self.apply_committed_writes(&txn).await;
+            // The originator decided to commit, so applying is infallible.
+            self.apply_committed_writes(&txn).await;
             self.release_locks(&txn.locked, &txn.id);
             // Forward the commit down the chain to any sub-participants this node
-            // composed (transitive composition: s1 -> s2 -> s3 ...).
-            let mut forward_err = res.err();
+            // composed (transitive composition: s1 -> s2 -> s3 ...). Forwarding
+            // failures are reported back but cannot undo the local commit.
+            let mut forward_err = None;
             for addr in txn.participants.iter().cloned().collect::<Vec<_>>() {
                 if let Err(e) = self.send_commit(addr, tid).await {
                     forward_err = Some(e);
@@ -709,8 +813,10 @@ impl Manager {
         let request_id = NEXT_ABORT_ID.fetch_add(1, Ordering::SeqCst);
         let reply_to = self.local_reply_addr().await;
         let msg = MeerkatMessage::Abort { request_id, txn_id: tid.clone(), reply_to };
-        // Best-effort: if the ack times out we still proceed (locks will be
-        // reclaimed by the participant when it next reconciles).
+        // We await the ack so that in the normal case the participant's locks
+        // are released before we return. If the ack times out the participant
+        // may still hold locks; durable abort retries and error reporting are
+        // tracked under issue #54.
         let _ = self.send_and_await_reply(
             addr, msg, request_id,
             "Timeout waiting for abort acknowledgement".to_string(),

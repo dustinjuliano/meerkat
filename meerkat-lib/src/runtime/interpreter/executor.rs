@@ -30,20 +30,27 @@ pub async fn execute(
         ActionStmt::Do(expr) => {
             let val = eval(expr, env, &mut EvalContext { manager, service_name, txn: txn.as_deref_mut() }).await?;
             match val {
-                Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
-                    if manager.remote_services.contains_key(&action_svc) {
-                        // Ship the action to its owning node under the shared
-                        // transaction (Option B). The remote node executes and
-                        // holds; our commit/abort decides its fate.
-                        manager.remote_action(&action_svc, stmts, closure_env, txn.as_deref_mut()).await?;
-                    } else {
-                        let mut exec_env = closure_env.clone();
-                        for s in &stmts {
-                            if let ExecuteEffect::Binding(name, val) =
-                                execute(s, &exec_env, manager, &action_svc, txn.as_deref_mut()).await?
-                            {
-                                exec_env.push((name, val));
+                Value::ActionClosure { stmts, env: closure_env, service: action_sid } => {
+                    // name_for_id tells us whether the action's service is local
+                    // (Some => its in-scope name) or remote (None). For remote we
+                    // ship to the owning node using the address embedded in the
+                    // ServiceId, so it runs even if not imported into this scope.
+                    match manager.name_for_id(&action_sid) {
+                        Some(svc_name) => {
+                            let mut exec_env = closure_env.clone();
+                            for s in &stmts {
+                                if let ExecuteEffect::Binding(name, val) =
+                                    execute(s, &exec_env, manager, &svc_name, txn.as_deref_mut()).await?
+                                {
+                                    exec_env.push((name, val));
+                                }
                             }
+                        }
+                        None => {
+                            // Ship to its owning node under the shared transaction
+                            // (Option B); the remote node executes and holds until
+                            // our commit/abort.
+                            manager.remote_action(&action_sid, stmts, closure_env, txn.as_deref_mut()).await?;
                         }
                     }
                     Ok(ExecuteEffect::None)

@@ -1,5 +1,7 @@
 use std::fmt::Display;
 //use crate::runtime::Manager;
+pub mod printer;
+pub use printer::AstPrinter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum UnOp {
@@ -300,4 +302,3 @@ impl Display for Decl {
         }
     }
 }
-

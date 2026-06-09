@@ -1,0 +1,21 @@
+import MyService
+watch 5;
+
+service S {
+    pub def x = 1;
+    def y = -x;
+    var z = !true;
+    table t { id: number, name: string, active: bool, };
+}
+
+@test(S) {
+    let a = {1, "hello", true};
+    do f(a);
+    assert(a.b == c);
+    insert {key: val} into table_name
+    a = 1 + 2 * 3 / 4 - 5 < 6 > 7 == 8 && 9 || 10;
+    b = if cond then 1 else 0;
+    c = fn x => x;
+    d = select id, name from table_name where id == 1;
+    e = fold(tn.cn, operation, identity);
+}

@@ -38,6 +38,10 @@ struct Args {
     /// Perform static checks and terminate immediately
     #[arg(short = 'c', long = "check", default_value_t = false)]
     check_only: bool,
+
+    /// Print the Abstract Syntax Tree (AST) after parsing.
+    #[arg(long = "ast", default_value_t = false)]
+    ast: bool,
 }
 
 #[tokio::main]
@@ -68,6 +72,13 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         Some(ref file) => {
             node.load_program(file)
                 .map_err(|e| format!("Parse error: {}", e))?;
+
+            if args.ast {
+                let printer = meerkat_lib::runtime::ast::AstPrinter::new();
+                if let Some(prog) = node.programs.first() {
+                    printer.print_program(&prog.ast);
+                }
+            }
 
             if args.check_only {
                 // TODO: Insert static checks here

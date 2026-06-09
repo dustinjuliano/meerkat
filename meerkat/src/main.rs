@@ -1,13 +1,13 @@
 mod repl;
 
 use clap::Parser;
-use meerkat_lib::net::network_layer::NetworkLayer;
+use std::error::Error;
+use meerkat_lib::runtime::ast::Stmt;
+use meerkat_lib::runtime::Node;
+use meerkat_lib::net::{Address, NetworkCommand, NetworkEvent, MeerkatMessage};
 use meerkat_lib::net::types::NodeType;
 use meerkat_lib::net::NetworkActor;
-use meerkat_lib::net::{Address, MeerkatMessage, NetworkCommand, NetworkEvent};
-use meerkat_lib::runtime::ast::Stmt;
-use meerkat_lib::runtime::Manager;
-use std::error::Error;
+use meerkat_lib::net::NetworkLayer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -58,37 +58,39 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let mut node = Node::new();
+    node.manager.local = args.local;
+
     match args.input_file {
         Some(ref file) => {
-            let prog = meerkat_lib::runtime::parser::parser::parse_file(file)
+            node.load_program(file)
                 .map_err(|e| format!("Parse error: {}", e))?;
 
             if args.server {
-                run_server(prog, remote_url_map, args.port, args.local).await
+                run_server(node, remote_url_map, args.port, args.local).await
             } else {
-                run_client(prog, file, remote_url_map, args.local).await
+                run_client(node, file, remote_url_map, args.local).await
             }
         }
         None => {
             if args.server {
                 return Err("-s/--server requires a file (-f). Pass a .mkt file containing the services to host.".into());
             }
-            let mut manager = Manager::new();
-            manager.local = args.local;
-            repl::run_repl(manager, remote_url_map).await
+            repl::run_repl(node, remote_url_map).await
         }
     }
 }
 
 async fn run_server(
-    prog: Vec<Stmt>,
+    node: Node,
     remote_url_map: std::collections::HashMap<String, String>,
     port: u16,
     local: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut net = NetworkActor::new(NodeType::Server).await?;
-    let mut manager = Manager::new();
+    let Node { mut manager, programs, .. } = node;
     manager.local = local;
+    let prog = &programs[0].ast;
 
     let node_ip = manager.get_node_ip();
     let listen_ip = if local { "127.0.0.1" } else { "0.0.0.0" };
@@ -112,7 +114,7 @@ async fn run_server(
     println!("Server listening at: {}", full_addr);
 
     // Print service URLs
-    for stmt in &prog {
+    for stmt in prog {
         if let Stmt::Service { name, .. } = stmt {
             println!("Service URL: {}/{}", full_addr, name);
         }
@@ -134,7 +136,7 @@ async fn run_server(
 
     // Load services after network and remote services are ready,
     // so that remote lookups during service initialization work correctly
-    for stmt in &prog {
+    for stmt in prog {
         if let Stmt::Service { name, decls } = stmt {
             manager
                 .create_service(name.clone(), decls.clone())
@@ -271,14 +273,11 @@ async fn run_server(
 }
 
 async fn run_client(
-    prog: Vec<Stmt>,
+    mut node: Node,
     input_file: &str,
     remote_url_map: std::collections::HashMap<String, String>,
     local: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let mut manager = Manager::new();
-    manager.local = local;
-
     // Start network if we have remote imports
     let mut net: Option<NetworkActor> = None;
     let mut local_full_addr: Option<String> = None;
@@ -292,7 +291,7 @@ async fn run_client(
             .handle_command(NetworkCommand::Listen { addr: listen_addr })
             .await;
         if let meerkat_lib::net::NetworkReply::ListenSuccess { addr } = reply {
-            let node_ip = manager.get_node_ip();
+            let node_ip = node.manager.get_node_ip();
             let peer_id = n.local_peer_id();
             let addr_str = addr
                 .0
@@ -305,27 +304,25 @@ async fn run_client(
 
     // Wire network actor into manager
     if let Some(n) = net {
-        manager.network = Some(n);
+        node.manager.network = Some(n);
     }
     // Record the canonical address (if networked) so service identities are
     // stable for the life of the process.
     if let Some(addr) = local_full_addr {
-        manager.set_local_address(addr);
+        node.manager.set_local_address(addr);
     }
+
+    let prog = node.programs[0].ast.clone();
 
     for stmt in &prog {
         match stmt {
             Stmt::Service { name, decls } => {
-                manager
-                    .create_service(name.clone(), decls.clone())
-                    .await
+                node.manager.create_service(name.clone(), decls.clone()).await
                     .map_err(|e| format!("Service error: {}", e))?;
                 println!("Service '{}' loaded", name);
             }
             Stmt::Test { service, stmts } => {
-                manager
-                    .execute_action(service, stmts)
-                    .await
+                node.manager.execute_action(service, stmts).await
                     .map_err(|e| format!("Test failed in '{}': {}", service, e))?;
                 println!("@test({}) passed", service);
             }
@@ -334,24 +331,22 @@ async fn run_client(
                 service: svc_name,
             } => {
                 if let Some(url) = remote_url_map.get(svc_name) {
-                    manager
-                        .remote_services
-                        .insert(svc_name.clone(), Address::new(url.as_str()));
+                    node.manager.remote_services.insert(
+                        svc_name.clone(),
+                        Address::new(url.as_str())
+                    );
                     println!("Remote service '{}' registered at {}", svc_name, url);
                 } else {
                     let base_dir = std::path::Path::new(input_file)
                         .parent()
                         .unwrap_or(std::path::Path::new("."));
                     let import_path = base_dir.join(path);
-                    let import_stmts = meerkat_lib::runtime::parser::parser::parse_file(
-                        import_path.to_str().unwrap(),
-                    )
-                    .map_err(|e| format!("Import parse error: {}", e))?;
-                    for import_stmt in &import_stmts {
+                    let import_path_str = import_path.to_str().unwrap();
+                    node.load_program(import_path_str).map_err(|e| format!("Import parse error: {}", e))?;
+                    let import_program = node.programs.last().ok_or("No program loaded")?;
+                    for import_stmt in &import_program.ast {
                         if let Stmt::Service { name, decls } = import_stmt {
-                            manager
-                                .create_service(name.clone(), decls.clone())
-                                .await
+                            node.manager.create_service(name.clone(), decls.clone()).await
                                 .map_err(|e| format!("Import service error: {}", e))?;
                             println!("Imported service '{}'", name);
                         }

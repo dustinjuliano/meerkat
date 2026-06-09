@@ -6,3 +6,5 @@ pub mod semantic_analysis;
 pub mod manager;
 pub use manager::Manager;
 pub type TestId = (usize, usize);
+pub mod node;
+pub use node::{Node, Program};

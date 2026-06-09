@@ -33,12 +33,6 @@ pub mod parser {
             .map_err(|e| format!("Parse error: {:?}", e))
     }
 
-    pub fn parse_file(filename: &str) -> Result<Vec<Stmt>, String> {
-        let content = std::fs::read_to_string(filename)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        parse_string(&content)
-    }
-
     /// Try to parse accumulated REPL input, distinguishing incomplete input from real errors.
     ///
     /// Returns `Incomplete` when the grammar signals `UnrecognizedEof`, meaning the user

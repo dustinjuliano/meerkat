@@ -3,8 +3,8 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use meerkat_lib::runtime::ast::{Expr, Stmt, Value};
 use meerkat_lib::runtime::interpreter::{eval, execute, EvalContext, ExecuteEffect};
 use meerkat_lib::runtime::parser::ReplParseResult;
-use meerkat_lib::runtime::parser::parser::{parse_file, parse_repl};
-use meerkat_lib::runtime::Manager;
+use meerkat_lib::runtime::parser::parser::parse_repl;
+use meerkat_lib::runtime::{Node, Manager};
 
 const PROMPT: &str = "meerkat> ";
 const PROMPT_CONT: &str = "       > ";
@@ -41,7 +41,7 @@ async fn check_watches(watches: &mut Vec<Watch>, manager: &mut Manager, repl_env
 }
 
 pub async fn run_repl(
-    mut manager: Manager,
+    mut node: Node,
     remote_url_map: std::collections::HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
@@ -56,10 +56,10 @@ pub async fn run_repl(
     if !remote_url_map.is_empty() {
         let mut n = meerkat_lib::net::NetworkActor::new(meerkat_lib::net::types::NodeType::Server).await
             .map_err(|e| format!("Network error: {}", e))?;
-        let listen_ip = if manager.local { "127.0.0.1" } else { "0.0.0.0" };
+        let listen_ip = if node.manager.local { "127.0.0.1" } else { "0.0.0.0" };
         let listen_addr = meerkat_lib::net::Address::new(&format!("/ip4/{}/tcp/0", listen_ip));
         n.handle_command(meerkat_lib::net::NetworkCommand::Listen { addr: listen_addr }).await;
-        manager.network = Some(n);
+        node.manager.network = Some(n);
     }
 
     let mut repl_env: Vec<(String, Value)> = Vec::new();
@@ -92,7 +92,7 @@ pub async fn run_repl(
         if buffer.trim().is_empty() {
             buffer.clear();
             continuation = false;
-            check_watches(&mut watches, &mut manager, &repl_env).await;
+            check_watches(&mut watches, &mut node.manager, &repl_env).await;
             continue;
         }
 
@@ -107,14 +107,14 @@ pub async fn run_repl(
             }
             ReplParseResult::Complete(stmts) => {
                 for stmt in stmts {
-                    match exec_stmt(stmt, &mut manager, &mut repl_env, &mut watches, &remote_url_map).await {
+                    match exec_stmt(stmt, &mut node, &mut repl_env, &mut watches, &remote_url_map).await {
                         Ok(Some(output)) => println!("{}", output),
                         Ok(None) => {}
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 // Check watches after every complete input
-                check_watches(&mut watches, &mut manager, &repl_env).await;
+                check_watches(&mut watches, &mut node.manager, &repl_env).await;
                 buffer.clear();
                 continuation = false;
             }
@@ -129,25 +129,25 @@ pub async fn run_repl(
 
 async fn exec_stmt(
     stmt: Stmt,
-    manager: &mut Manager,
+    node: &mut Node,
     repl_env: &mut Vec<(String, Value)>,
     watches: &mut Vec<Watch>,
     remote_url_map: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     match stmt {
         Stmt::Service { name, decls } => {
-            manager.create_service(name.clone(), decls).await
+            node.manager.create_service(name.clone(), decls).await
                 .map_err(|e| format!("Service '{}': {}", name, e))?;
             Ok(Some(format!("Service '{}' loaded.", name)))
         }
         Stmt::Test { service, stmts } => {
-            manager.execute_action(&service, &stmts).await
+            node.manager.execute_action(&service, &stmts).await
                 .map_err(|e| format!("@test({}): {}", service, e))?;
             Ok(Some(format!("@test({}) passed.", service)))
         }
         Stmt::Import { path, service: svc_name } => {
             if let Some(url) = remote_url_map.get(&svc_name) {
-                manager.remote_services.insert(
+                node.manager.remote_services.insert(
                     svc_name.clone(),
                     meerkat_lib::net::Address::new(url.as_str()),
                 );
@@ -155,20 +155,21 @@ async fn exec_stmt(
                     "Remote service '{}' registered at {}.", svc_name, url
                 )));
             }
-            let import_stmts = parse_file(&path)
+            node.load_program(&path)
                 .map_err(|e| format!("Import '{}': {}", path, e))?;
+            let import_program = node.programs.last().ok_or("No program loaded")?;
             let mut loaded = Vec::new();
-            for s in import_stmts {
+            for s in &import_program.ast {
                 if let Stmt::Service { name, decls } = s {
-                    manager.create_service(name.clone(), decls).await
+                    node.manager.create_service(name.clone(), decls.clone()).await
                         .map_err(|e| format!("Imported service '{}': {}", name, e))?;
-                    loaded.push(name);
+                    loaded.push(name.clone());
                 }
             }
             Ok(Some(format!("Imported service(s): {}.", loaded.join(", "))))
         }
         Stmt::ActionStmt(action_stmt) => {
-            let effect = execute(&action_stmt, repl_env, manager, "", None)
+            let effect = execute(&action_stmt, repl_env, &mut node.manager, "", None)
                 .await
                 .map_err(|e| format!("{}", e))?;
             match effect {
@@ -186,7 +187,7 @@ async fn exec_stmt(
             let initial = eval(
                 &expr,
                 repl_env,
-                &mut EvalContext { manager, service_name: "", txn: None },
+                &mut EvalContext { manager: &mut node.manager, service_name: "", txn: None },
             ).await.ok();
             let msg = match &initial {
                 Some(v) => format!("Watching: {} (current value: {})", label, v),
@@ -203,3 +204,4 @@ async fn exec_stmt(
         }
     }
 }
+

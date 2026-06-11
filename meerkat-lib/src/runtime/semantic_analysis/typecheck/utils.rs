@@ -1,6 +1,6 @@
-use crate::ast::DataType;
 use super::Type;
 use super::TypecheckEnv;
+use crate::ast::DataType;
 use std::{
     collections::{HashMap, HashSet},
     fmt::format,
@@ -10,11 +10,16 @@ use std::{
 impl Type {
     fn free_var(&self, typ_var_binded: &HashSet<String>) -> HashSet<String> {
         match self {
-            Type::Int | Type::Bool | Type::String | Type::Unit | Type::Action | Type::Vector(..) => HashSet::new(),
+            Type::Int
+            | Type::Bool
+            | Type::String
+            | Type::Unit
+            | Type::Action
+            | Type::Vector(..) => HashSet::new(),
             // Calculate free type var in function type
             // e.g. (a, int, bool) -> b has free_var
             // for convenience, we clone the whole type bindings from previous
-            // level, if perfomance matters, we can switch to a stack of type
+            // level, if performance matters, we can switch to a stack of type
             // binds to efficiently maintain type bindings
             Type::Fun(params, ret) => {
                 let mut typ_var_binded: HashSet<String> = typ_var_binded.clone();
@@ -35,9 +40,7 @@ impl Type {
                     HashSet::from([x.clone()])
                 }
             }
-            Type::Table(schema) => {
-                HashSet::new()
-            }
+            Type::Table(schema) => HashSet::new(),
         }
     }
 }
@@ -77,7 +80,14 @@ impl TypecheckEnv {
     // union-find based unification
     pub fn find(&self, typ: &Type) -> Type {
         match typ {
-            Type::Int | Type::Bool | Type::String | Type::Unit | Type::Action | Type::Fun(_, _) | Type::Table(_)  | Type::Vector(..) => typ.clone(),
+            Type::Int
+            | Type::Bool
+            | Type::String
+            | Type::Unit
+            | Type::Action
+            | Type::Fun(_, _)
+            | Type::Table(_)
+            | Type::Vector(..) => typ.clone(),
 
             Type::TypVar(name) => {
                 let canonical_typ = self
@@ -126,16 +136,14 @@ impl TypecheckEnv {
                 }
             }
 
-            (Type::Table(schema1), Type::Table(schema2)) => {
-                true
-            }
+            (Type::Table(schema1), Type::Table(schema2)) => true,
 
             (Type::Table(schema), Type::Vector(elements)) => {
                 for (field, item) in schema.iter().zip(elements.iter()) {
                     match field.type_ {
                         DataType::Bool => self.unify(&Type::Bool, item),
                         DataType::Number => self.unify(&Type::Int, item),
-                        DataType::String => self.unify(&Type::String, item)
+                        DataType::String => self.unify(&Type::String, item),
                     };
                 }
                 true

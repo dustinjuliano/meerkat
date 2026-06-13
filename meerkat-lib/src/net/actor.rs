@@ -585,13 +585,13 @@ impl NetworkActor {
                 //println!("Identify event: {:?}", event);
             }
             libp2p::swarm::SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                // Determine if this failure affects our expected relay server
+                // Check if this connection error matches our pending relay peer
                 let matches_relay = Self::get_pending_relay_peer(pending_relay)
                     .map_or(false, |relay_peer| {
-                        peer_id.map_or(true, |failed_peer| failed_peer == relay_peer)
+                        peer_id.map_or(false, |failed_peer| failed_peer == relay_peer)
                     });
 
-                // If the relay dial failed fail the pending relay reservation
+                // Fail the pending relay reservation if it matches the dial error
                 if matches_relay {
                     if let Some(state) = pending_relay.take() {
                         let tx = match state {

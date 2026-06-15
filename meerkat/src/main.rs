@@ -99,8 +99,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         None => {
-            if args.server || args.check_only {
-                return Err("Expected a .mkt file (-f).".into());
+            if args.server || args.check_only || args.ast {
+                return Err(
+                    "Expected a .mkt file (-f) for --server, --check, or --ast mode.".into(),
+                );
             }
             let mut manager = Manager::new();
             manager.local = args.local;

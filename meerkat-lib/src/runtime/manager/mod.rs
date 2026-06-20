@@ -2424,7 +2424,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(EvalError::LockConflict(_))),
+            matches!(result, Err(EvalError::WaitDieAbort(_))),
             "init read must respect the lock"
         );
         assert!(

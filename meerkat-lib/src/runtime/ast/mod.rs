@@ -27,12 +27,25 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ActionStmt {
-    Let { name: Symbol, expr: Expr },
+    Let {
+        name: Symbol,
+        expr: Expr,
+    },
     Expr(Expr),
     Do(Expr),
-    Assert(Expr),
-    Assign { name: Symbol, expr: Expr },
-    Insert { row: Expr, table_name: Symbol },
+    /// An `assert` statement to check invariants
+    ///
+    /// The `String` parameter captures the exact raw source
+    /// string of the assertion condition for error reporting
+    Assert(Expr, String),
+    Assign {
+        name: Symbol,
+        expr: Expr,
+    },
+    Insert {
+        row: Expr,
+        table_name: Symbol,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -356,7 +369,7 @@ impl Display for ActionStmt {
             ActionStmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
             ActionStmt::Expr(expr) => write!(f, "{}", expr),
             ActionStmt::Do(expr) => write!(f, "do {}", expr),
-            ActionStmt::Assert(expr) => write!(f, "assert {}", expr),
+            ActionStmt::Assert(expr, _) => write!(f, "assert {}", expr),
             ActionStmt::Assign { name, expr } => write!(f, "{} = {}", name, expr),
             ActionStmt::Insert { row, table_name } => {
                 write!(f, "insert into {} {}", table_name, row)

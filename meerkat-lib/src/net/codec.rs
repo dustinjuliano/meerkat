@@ -465,7 +465,13 @@ pub fn encode_action_stmt(stmt: &ActionStmt, interner: &Interner) -> Result<NetA
         }
         ActionStmt::Expr(expr) => Ok(NetActionStmt::Expr(encode_expr(expr, interner)?)),
         ActionStmt::Do(expr) => Ok(NetActionStmt::Do(encode_expr(expr, interner)?)),
-        ActionStmt::Assert(expr) => Ok(NetActionStmt::Assert(encode_expr(expr, interner)?)),
+        ActionStmt::Assert(expr, text) => {
+            validate_string_literal(text)?;
+            Ok(NetActionStmt::Assert(
+                encode_expr(expr, interner)?,
+                text.clone(),
+            ))
+        }
         ActionStmt::Assign { name, expr } => {
             let name_str = interner.get(*name);
             validate_identifier(name_str)?;
@@ -504,7 +510,10 @@ pub fn decode_action_stmt(stmt: NetActionStmt, interner: &mut Interner) -> Resul
         }
         NetActionStmt::Expr(expr) => Ok(ActionStmt::Expr(decode_expr(expr, interner)?)),
         NetActionStmt::Do(expr) => Ok(ActionStmt::Do(decode_expr(expr, interner)?)),
-        NetActionStmt::Assert(expr) => Ok(ActionStmt::Assert(decode_expr(expr, interner)?)),
+        NetActionStmt::Assert(expr, text) => {
+            validate_string_literal(&text)?;
+            Ok(ActionStmt::Assert(decode_expr(expr, interner)?, text))
+        }
         NetActionStmt::Assign { name, expr } => {
             validate_identifier(&name)?;
             Ok(ActionStmt::Assign {
@@ -975,9 +984,12 @@ mod tests {
 
         // 3. Assert
         let interner = Interner::new();
-        let stmt_assert = ActionStmt::Assert(Expr::Literal {
-            val: Value::Bool { val: true },
-        });
+        let stmt_assert = ActionStmt::Assert(
+            Expr::Literal {
+                val: Value::Bool { val: true },
+            },
+            "true".to_string(),
+        );
         run_stmt_test(&stmt_assert, &interner);
 
         // 4. Assign
@@ -1075,6 +1087,39 @@ mod tests {
         let val = Value::String { val: long_str };
         let interner = Interner::new();
         let res = encode_value(&val, &interner);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
+    }
+
+    /// Verify round-trip encoding and decoding for
+    /// assertion statement
+    #[test]
+    fn test_codec_assert_roundtrip() {
+        let interner = Interner::new();
+        let stmt = ActionStmt::Assert(
+            Expr::Literal {
+                val: Value::Bool { val: false },
+            },
+            "x == 5".to_string(),
+        );
+        let encoded = encode_action_stmt(&stmt, &interner).unwrap();
+        let mut interner_new = Interner::new();
+        let decoded = decode_action_stmt(encoded, &mut interner_new).unwrap();
+        assert_eq!(format!("{}", stmt), format!("{}", decoded));
+    }
+
+    /// Verify decoding an assertion with oversized text fails
+    #[test]
+    fn test_codec_decode_oversized_assert() {
+        let long_str = "a".repeat(MAX_STRING_LITERAL_LENGTH + 1);
+        let net_stmt = NetActionStmt::Assert(
+            NetExpr::Literal {
+                val: NetValue::Bool { val: false },
+            },
+            long_str,
+        );
+        let mut interner = Interner::new();
+        let res = decode_action_stmt(net_stmt, &mut interner);
         assert!(res.is_err());
         assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
     }

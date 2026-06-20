@@ -5,12 +5,16 @@
 // Initial grammar for L1 
 
 // Grammar 
-grammar<'input>(interner: &mut crate::runtime::interner::Interner);
+grammar<'input>(
+    input: &'input str,
+    interner: &mut Interner
+);
 
 use crate::ast::{Stmt, ActionStmt, Decl, Expr, UnOp, BinOp, DataType, Field, Value};
 use crate::runtime::interner::{Interner, Symbol};
 use lalrpop_util::ParseError;
 use crate::runtime::parser::lex::Token;
+use crate::runtime::limits::MAX_STRING_LITERAL_LENGTH;
 
 use std::str::FromStr;
 
@@ -104,8 +108,20 @@ ActionStmt: ActionStmt = {
     "do" <e: Expr> ";" => {
         ActionStmt::Do(e)
     },
-    "assert" "(" <e:Expr> ")" ";" => {
-        ActionStmt::Assert(e)
+    "assert" "(" <l: @L> <e:Expr> <r: @R> ")" ";" =>? {
+        let assert_text = input[l..r].to_string();
+        let limit = MAX_STRING_LITERAL_LENGTH;
+        if assert_text.len() > limit {
+            Err(ParseError::User {
+                error: format!(
+                    "Assertion text exceeds maximum length of {} \
+                     characters",
+                    limit
+                ),
+            })
+        } else {
+            Ok(ActionStmt::Assert(e, assert_text))
+        }
     },
     "insert"  <e: Expr> "into" <t: Ident> => {
         ActionStmt::Insert {row: e, table_name: t}

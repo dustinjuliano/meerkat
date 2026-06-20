@@ -1686,9 +1686,12 @@ mod tests {
                     val: Value::Number { val: 99 },
                 },
             },
-            ActionStmt::Assert(Expr::Literal {
-                val: Value::Bool { val: false },
-            }),
+            ActionStmt::Assert(
+                Expr::Literal {
+                    val: Value::Bool { val: false },
+                },
+                "false".to_string(),
+            ),
         ];
         let result = tc.manager.execute_action(tc.foo, &stmts).await;
         assert!(result.is_err());
@@ -1725,9 +1728,12 @@ mod tests {
                     val: Value::Number { val: 99 },
                 },
             },
-            ActionStmt::Assert(Expr::Literal {
-                val: Value::Bool { val: false },
-            }),
+            ActionStmt::Assert(
+                Expr::Literal {
+                    val: Value::Bool { val: false },
+                },
+                "false".to_string(),
+            ),
         ];
 
         let result = tc.manager.execute_action(tc.foo, &failing_write).await;
@@ -1744,7 +1750,10 @@ mod tests {
         // If a transaction fails after a read, its read lock must still
         // be released
         let mut tc = manager_with_x().await;
-        let stmts = vec![ActionStmt::Assert(Expr::Variable { name: tc.x })];
+        let stmts = vec![ActionStmt::Assert(
+            Expr::Variable { name: tc.x },
+            "x".to_string(),
+        )];
 
         let result = tc.manager.execute_action(tc.foo, &stmts).await;
 

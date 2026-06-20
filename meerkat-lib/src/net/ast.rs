@@ -23,7 +23,10 @@ pub enum NetActionStmt {
     /// A `do` statement to evaluate an expression for side effects
     Do(NetExpr),
     /// An `assert` statement to check invariants
-    Assert(NetExpr),
+    ///
+    /// The `String` parameter captures the exact raw source
+    /// string of the assertion condition for error reporting
+    Assert(NetExpr, String),
     /// Re-assign a value to an existing variable
     Assign { name: String, expr: NetExpr },
     /// Insert a record into a table

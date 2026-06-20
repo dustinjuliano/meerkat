@@ -56,7 +56,7 @@ pub fn parse_string(input: &str, interner: &mut Interner) -> Result<Vec<Stmt>, S
     }
 
     meerkat::ProgParser::new()
-        .parse(interner, lex_stream)
+        .parse(input, interner, lex_stream)
         .map_err(|e| format!("Parse error: {:?}", e))
 }
 
@@ -114,9 +114,12 @@ pub fn parse_repl(input: &str, interner: &mut Interner) -> ReplParseResult {
         lex_stream.push((span.start, t, span.end));
     }
 
-    match meerkat::ProgParser::new().parse(interner, lex_stream) {
-        Ok(stmts) if !stmts.is_empty() => ReplParseResult::Complete(stmts),
-        Ok(_) => ReplParseResult::Incomplete,
+    let parser = meerkat::ProgParser::new();
+    match parser.parse(input, interner, lex_stream) {
+        Ok(stmts) => match stmts.first() {
+            Some(_) => ReplParseResult::Complete(stmts),
+            None => ReplParseResult::Incomplete,
+        },
         Err(ParseError::UnrecognizedEof { .. }) => ReplParseResult::Incomplete,
         Err(e) => ReplParseResult::Error(format!("{:?}", e)),
     }
@@ -153,5 +156,63 @@ mod tests {
         assert!(res
             .unwrap_err()
             .contains("string literal exceeds maximum length"));
+    }
+    /// Verify that parsing an assertion captures the correct
+    /// raw string
+    #[test]
+    fn test_parse_assert_captures_string() {
+        use crate::ast::{ActionStmt, Stmt};
+
+        let mut interner = Interner::new();
+        let input = "assert (x == 5);";
+        let res = parse_string(input, &mut interner);
+        assert!(res.is_ok());
+        let ast = res.unwrap();
+        assert_eq!(ast.len(), 1);
+        match &ast[0] {
+            Stmt::ActionStmt(ActionStmt::Assert(_, text)) => {
+                assert_eq!(text, "x == 5");
+            }
+            _ => panic!("Expected ActionStmt::Assert"),
+        }
+    }
+
+    /// Verify that parsing an assertion exceeding length
+    /// limit fails
+    #[test]
+    fn test_parse_oversized_assert() {
+        let mut interner = Interner::new();
+        let limit = MAX_STRING_LITERAL_LENGTH;
+        let long_expr = "1+".repeat((limit / 2) + 1) + "1";
+        let input = format!("assert ({});", long_expr);
+        let res = parse_string(&input, &mut interner);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("Assertion text exceeds maximum length"));
+    }
+
+    /// Verify that parsing an `assert` exceeding the length limit
+    /// returns a `ParseError::User` error variant
+    #[test]
+    fn test_parse_oversized_assert_error_type() {
+        use lalrpop_util::ParseError;
+        let mut interner = Interner::new();
+        let limit = MAX_STRING_LITERAL_LENGTH;
+        let half_limit = limit / 2;
+        let repeat_count = half_limit + 1;
+        let repeated = "1+".repeat(repeat_count);
+        let long_expr = format!("{}1", repeated);
+        let input = format!("assert ({});", long_expr);
+        let mut lex_stream = Vec::new();
+        for (t, span) in lex::Token::lexer(&input).spanned() {
+            lex_stream.push((span.start, t, span.end));
+        }
+        let parser = meerkat::ProgParser::new();
+        let res = parser.parse(&input, &mut interner, lex_stream);
+        assert!(matches!(
+            res,
+            Err(ParseError::User { ref error }) if error.contains("Assertion text exceeds maximum length")
+        ));
     }
 }

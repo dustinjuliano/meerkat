@@ -14,6 +14,7 @@ pub enum EvalError {
     NotImplemented,
     WaitDieAbort(String),
     WaitOn(Symbol, Symbol),
+    AssertionError(String),
 }
 
 /// Implement the `Display` trait for the `EvalError` type
@@ -39,6 +40,7 @@ impl std::fmt::Display for EvalError {
             EvalError::WaitOn(service, var) => {
                 write!(f, "Wait-die wait on Symbol({})::Symbol({})", service, var)
             }
+            EvalError::AssertionError(s) => write!(f, "Assertion failed: {}", s),
         }
     }
 }

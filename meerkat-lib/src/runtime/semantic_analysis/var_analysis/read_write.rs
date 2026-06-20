@@ -75,7 +75,7 @@ impl Expr {
                         ActionStmt::Do(expr) => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
-                        ActionStmt::Assert(expr) => {
+                        ActionStmt::Assert(expr, _) => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
                         ActionStmt::Let { name: _, expr } => {

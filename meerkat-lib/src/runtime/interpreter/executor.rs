@@ -91,7 +91,7 @@ pub async fn execute(
                 _ => Err(EvalError::TypeError("do expects an action".to_string())),
             }
         }
-        ActionStmt::Assert(expr) => {
+        ActionStmt::Assert(expr, text) => {
             let val = eval(
                 expr,
                 env,
@@ -104,10 +104,13 @@ pub async fn execute(
             .await?;
             match val {
                 Value::Bool { val: true } => Ok(ExecuteEffect::None),
-                Value::Bool { val: false } => Err(EvalError::TypeError(
-                    "Assertion failed: ".to_string() + &expr.to_string(),
-                )),
-                _ => Err(EvalError::TypeError("assert expects a boolean".to_string())),
+                Value::Bool { val: false } => Err(EvalError::AssertionError(text.clone())),
+                Value::Number { .. }
+                | Value::String { .. }
+                | Value::Closure { .. }
+                | Value::ActionClosure { .. } => {
+                    Err(EvalError::TypeError("assert expects a boolean".to_string()))
+                }
             }
         }
         ActionStmt::Let { name, expr } => {
@@ -137,5 +140,50 @@ pub async fn execute(
             Ok(ExecuteEffect::ExprValue(val))
         }
         ActionStmt::Insert { .. } => Err(EvalError::NotImplemented),
+    }
+}
+
+/// Unit tests for the executor
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+    use crate::runtime::interner::Interner;
+
+    /// Verify that `EvalError::AssertionError` formats
+    /// correctly and is returned upon assertion failure
+    #[tokio::test]
+    async fn test_assertion_error_execution_and_formatting() {
+        let err = EvalError::AssertionError("x == 5".to_string());
+        assert_eq!(err.to_string(), "Assertion failed: x == 5");
+
+        let mut manager = Manager::new(Interner::new());
+        let stmt = ActionStmt::Assert(
+            Expr::Literal {
+                val: Value::Bool { val: false },
+            },
+            "x == 5".to_string(),
+        );
+
+        let res = execute(&stmt, &[], &mut manager, Symbol::empty(), None).await;
+
+        match res {
+            Ok(_) => panic!("Expected assertion to fail"),
+            Err(err) => match err {
+                EvalError::AssertionError(text) => {
+                    assert_eq!(text, "x == 5");
+                }
+                EvalError::TypeError(_)
+                | EvalError::VarNotFound(_)
+                | EvalError::ServiceNotFound(_)
+                | EvalError::LocalDispatchFailed(_)
+                | EvalError::RemoteDispatchFailed(_)
+                | EvalError::NotImplemented
+                | EvalError::WaitDieAbort(_)
+                | EvalError::WaitOn(_, _) => {
+                    panic!("Expected EvalError::AssertionError")
+                }
+            },
+        }
     }
 }

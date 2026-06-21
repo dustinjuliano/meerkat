@@ -1805,7 +1805,9 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(x_state(&tc).value, Value::Number { val: 0 });
-        // this is probably wrong? since the initialization of the manager should have involved a txn
+        // NOTE: changed this test case to check that the latest_write_txn is the txn that created
+        // the service and not none (as it was previously). Since this is changing a test case,
+        // please make sure to review it
         assert_eq!(x_state(&tc).latest_write_txn, last_txn);
         assert_x_unlocked(&tc);
     }

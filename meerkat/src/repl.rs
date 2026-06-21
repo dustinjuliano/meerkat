@@ -89,8 +89,10 @@ pub async fn run_repl(
             "0.0.0.0"
         };
         let listen_addr = meerkat_lib::net::Address::new(format!("/ip4/{}/tcp/0", listen_ip));
-        n.handle_command(meerkat_lib::net::NetworkCommand::Listen { addr: listen_addr })
+        let reply = n
+            .handle_command(meerkat_lib::net::NetworkCommand::Listen { addr: listen_addr })
             .await;
+        crate::listen_success_addr(reply)?;
         manager.network = Some(n);
     }
 

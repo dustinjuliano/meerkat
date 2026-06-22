@@ -105,7 +105,7 @@ pub async fn execute(
             match val {
                 Value::Bool { val: true } => Ok(ExecuteEffect::None),
                 Value::Bool { val: false } => Err(EvalError::AssertionError(text.clone())),
-                Value::Number { .. }
+                Value::Int { .. }
                 | Value::String { .. }
                 | Value::Closure { .. }
                 | Value::ActionClosure { .. } => {

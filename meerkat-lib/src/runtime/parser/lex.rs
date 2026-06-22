@@ -180,8 +180,6 @@ pub enum Token<'a> {
     IF_KW,
     #[token("else")]
     ELSE_KW,
-    #[token("number")]
-    NUMBER_KW,
     #[token("string")]
     STRING_KW,
     #[token("bool")]

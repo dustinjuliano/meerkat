@@ -3,7 +3,7 @@ grammar<'input>(
     interner: &mut Interner
 );
 
-use crate::ast::{Stmt, ActionStmt, Decl, Expr, UnOp, BinOp, DataType, Field, Value};
+use crate::ast::{Stmt, ActionStmt, Decl, Expr, UnOp, BinOp, TableType, Field, Value};
 use crate::runtime::tt::{Type, Param};
 use crate::runtime::interner::{Interner, Symbol};
 use lalrpop_util::ParseError;
@@ -36,7 +36,6 @@ extern {
         "then" => Token::THEN_KW,
         "if" => Token::IF_KW,
         "else" => Token::ELSE_KW,
-        "number" => Token::NUMBER_KW,
         "string" => Token::STRING_KW,
         "bool" => Token::BOOL_KW,
         "int" => Token::INT_KW,
@@ -150,10 +149,10 @@ TableField: Field = {
 
 TableFields: Vec<Field> = TableField*;
 
-TableType: DataType = {
-    "number" => DataType::Number,
-    "string" => DataType::String,
-    "bool" => DataType::Bool,
+TableType: TableType = {
+    "int" => TableType::Int,
+    "string" => TableType::String,
+    "bool" => TableType::Bool,
 }
 
 Type: Type = {
@@ -213,7 +212,7 @@ Args: Vec<Expr> = {
 }
 
 SubExpr: Expr = {
-    <n:Number> => Expr::Literal { val: Value::Number { val: n } },
+    <n:Number> => Expr::Literal { val: Value::Int { val: n } },
     <b:Bool> => Expr::Literal { val: Value::Bool { val: b } },
     <s: "strlit"> => Expr::Literal { val: Value::String { val: s.to_owned() } },
     <i:Ident> => Expr::Variable { name: i },

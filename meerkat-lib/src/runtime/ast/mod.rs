@@ -81,7 +81,7 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
-    Number {
+    Int {
         val: i32,
     },
     Bool {
@@ -203,13 +203,13 @@ pub enum Decl {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Field {
     pub name: Symbol,
-    pub ty: DataType,
+    pub ty: TableType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DataType {
+pub enum TableType {
     String,
-    Number,
+    Int,
     Bool,
 }
 
@@ -251,7 +251,7 @@ impl Display for Value {
     ///     `std::fmt::Result`: The result of the formatting operation
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Number { val } => write!(f, "{}", val),
+            Value::Int { val } => write!(f, "{}", val),
             Value::Bool { val } => write!(f, "{}", val),
             Value::String { val } => write!(f, "\"{}\"", val),
             Value::Closure {

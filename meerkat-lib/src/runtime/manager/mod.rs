@@ -1501,12 +1501,12 @@ mod tests {
             name: tc.x,
             ty: None,
             val: Expr::Literal {
-                val: Value::Number { val: 1 },
+                val: Value::Int { val: 1 },
             },
         }];
         tc.manager.create_service(tc.foo, decls).await.unwrap();
         let result = tc.manager.lookup(tc.x, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 1 });
+        assert_eq!(result, Value::Int { val: 1 });
     }
 
     #[tokio::test]
@@ -1517,7 +1517,7 @@ mod tests {
                 name: tc.x,
                 ty: None,
                 val: Expr::Literal {
-                    val: Value::Number { val: 2 },
+                    val: Value::Int { val: 2 },
                 },
             },
             Decl::DefDecl {
@@ -1527,7 +1527,7 @@ mod tests {
                     op: crate::ast::BinOp::Add,
                     expr1: Box::new(Expr::Variable { name: tc.x }),
                     expr2: Box::new(Expr::Literal {
-                        val: Value::Number { val: 3 },
+                        val: Value::Int { val: 3 },
                     }),
                 },
                 is_pub: true,
@@ -1535,7 +1535,7 @@ mod tests {
         ];
         tc.manager.create_service(tc.foo, decls).await.unwrap();
         let result = tc.manager.lookup(tc.f, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 5 });
+        assert_eq!(result, Value::Int { val: 5 });
     }
 
     #[tokio::test]
@@ -1554,7 +1554,7 @@ mod tests {
                 name: tc.x,
                 ty: None,
                 val: Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 },
             },
             Decl::DefDecl {
@@ -1564,7 +1564,7 @@ mod tests {
                     op: crate::ast::BinOp::Add,
                     expr1: Box::new(Expr::Variable { name: tc.x }),
                     expr2: Box::new(Expr::Literal {
-                        val: Value::Number { val: 10 },
+                        val: Value::Int { val: 10 },
                     }),
                 },
                 is_pub: true,
@@ -1574,15 +1574,15 @@ mod tests {
 
         // f should be 11 initially
         let result = tc.manager.lookup(tc.f, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 11 });
+        assert_eq!(result, Value::Int { val: 11 });
 
         // update x to 5, f should become 15
         tc.manager
-            .assign(tc.foo, tc.x, Value::Number { val: 5 }, None)
+            .assign(tc.foo, tc.x, Value::Int { val: 5 }, None)
             .await
             .unwrap();
         let result = tc.manager.lookup(tc.f, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 15 });
+        assert_eq!(result, Value::Int { val: 15 });
     }
 
     // Helper: service with a single var x = 0
@@ -1592,7 +1592,7 @@ mod tests {
             name: tc.x,
             ty: None,
             val: Expr::Literal {
-                val: Value::Number { val: 0 },
+                val: Value::Int { val: 0 },
             },
         }];
         tc.manager.create_service(tc.foo, decls).await.unwrap();
@@ -1629,13 +1629,13 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.x }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             },
         }];
         tc.manager.execute_action(tc.foo, &stmts).await.unwrap();
         let result = tc.manager.lookup(tc.x, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 1 });
+        assert_eq!(result, Value::Int { val: 1 });
     }
 
     #[tokio::test]
@@ -1650,14 +1650,14 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.x }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             },
         }];
         tc.manager.execute_action(tc.foo, &stmts).await.unwrap();
         tc.manager.execute_action(tc.foo, &stmts).await.unwrap();
         let result = tc.manager.lookup(tc.x, tc.foo, None).await.unwrap();
-        assert_eq!(result, Value::Number { val: 2 });
+        assert_eq!(result, Value::Int { val: 2 });
     }
 
     #[tokio::test]
@@ -1668,7 +1668,7 @@ mod tests {
         let stmts = vec![ActionStmt::Assign {
             name: tc.x,
             expr: Expr::Literal {
-                val: Value::Number { val: 42 },
+                val: Value::Int { val: 42 },
             },
         }];
         tc.manager.execute_action(tc.foo, &stmts).await.unwrap();
@@ -1683,14 +1683,14 @@ mod tests {
         let stmts = vec![ActionStmt::Assign {
             name: tc.x,
             expr: Expr::Literal {
-                val: Value::Number { val: 42 },
+                val: Value::Int { val: 42 },
             },
         }];
 
         tc.manager.execute_action(tc.foo, &stmts).await.unwrap();
 
         let state = x_state(&tc);
-        assert_eq!(state.value, Value::Number { val: 42 });
+        assert_eq!(state.value, Value::Int { val: 42 });
         assert!(state.latest_write_txn.is_some());
     }
 
@@ -1709,7 +1709,7 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.x }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             },
         }]);
@@ -1719,7 +1719,7 @@ mod tests {
         // inner write took effect
         let result = tc.manager.lookup(tc.x, tc.foo, None).await.unwrap();
         // and the lock was released
-        assert_eq!(result, Value::Number { val: 1 });
+        assert_eq!(result, Value::Int { val: 1 });
         assert_x_unlocked(&tc);
     }
 
@@ -1734,7 +1734,7 @@ mod tests {
             ActionStmt::Assign {
                 name: tc.x,
                 expr: Expr::Literal {
-                    val: Value::Number { val: 99 },
+                    val: Value::Int { val: 99 },
                 },
             },
             ActionStmt::Assert(
@@ -1749,7 +1749,7 @@ mod tests {
         // `x` must remain 0 — the buffered write to 99 was never committed
         let x = tc.manager.lookup(tc.x, tc.foo, None).await.unwrap();
         // and the lock was released
-        assert_eq!(x, Value::Number { val: 0 });
+        assert_eq!(x, Value::Int { val: 0 });
         assert_x_unlocked(&tc);
     }
 
@@ -1762,7 +1762,7 @@ mod tests {
         let successful_write = vec![ActionStmt::Assign {
             name: tc.x,
             expr: Expr::Literal {
-                val: Value::Number { val: 1 },
+                val: Value::Int { val: 1 },
             },
         }];
         tc.manager
@@ -1776,7 +1776,7 @@ mod tests {
             ActionStmt::Assign {
                 name: tc.x,
                 expr: Expr::Literal {
-                    val: Value::Number { val: 99 },
+                    val: Value::Int { val: 99 },
                 },
             },
             ActionStmt::Assert(
@@ -1791,7 +1791,7 @@ mod tests {
 
         assert!(result.is_err());
         let state = x_state(&tc);
-        assert_eq!(state.value, Value::Number { val: 1 });
+        assert_eq!(state.value, Value::Int { val: 1 });
         assert_eq!(state.latest_write_txn, previous_txn);
         assert_x_unlocked(&tc);
     }
@@ -1810,7 +1810,7 @@ mod tests {
         let result = tc.manager.execute_action(tc.foo, &stmts).await;
 
         assert!(result.is_err());
-        assert_eq!(x_state(&tc).value, Value::Number { val: 0 });
+        assert_eq!(x_state(&tc).value, Value::Int { val: 0 });
         // NOTE: changed this test case to check that the latest_write_txn is the txn that created
         // the service and not none (as it was previously). Since this is changing a test case,
         // please make sure to review it
@@ -1832,7 +1832,7 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.w }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 5 },
+                    val: Value::Int { val: 5 },
                 }),
             },
         }]);
@@ -1844,7 +1844,7 @@ mod tests {
                         name: tc.w,
                         ty: None,
                         val: Expr::Literal {
-                            val: Value::Number { val: 10 },
+                            val: Value::Int { val: 10 },
                         },
                     },
                     Decl::DefDecl {
@@ -1865,7 +1865,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -1880,7 +1880,7 @@ mod tests {
                     op: crate::ast::BinOp::Add,
                     expr1: Box::new(Expr::Variable { name: tc.x }),
                     expr2: Box::new(Expr::Literal {
-                        val: Value::Number { val: 1 },
+                        val: Value::Int { val: 1 },
                     }),
                 },
             },
@@ -1894,11 +1894,11 @@ mod tests {
         // Both services' writes committed
         assert_eq!(
             tc.manager.lookup(tc.x, tc.s1, None).await.unwrap(),
-            Value::Number { val: 1 }
+            Value::Int { val: 1 }
         );
         assert_eq!(
             tc.manager.lookup(tc.w, tc.s2, None).await.unwrap(),
-            Value::Number { val: 15 }
+            Value::Int { val: 15 }
         );
         // Locks released on both services
         assert!(matches!(
@@ -1937,7 +1937,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -1979,7 +1979,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -2017,7 +2017,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -2042,7 +2042,7 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.x }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             },
         }];
@@ -2076,14 +2076,14 @@ mod tests {
                         name: tc.y,
                         ty: None,
                         val: Expr::Literal {
-                            val: Value::Number { val: 0 },
+                            val: Value::Int { val: 0 },
                         },
                     },
                     Decl::VarDecl {
                         name: tc.x,
                         ty: None,
                         val: Expr::Literal {
-                            val: Value::Number { val: 0 },
+                            val: Value::Int { val: 0 },
                         },
                     },
                 ],
@@ -2115,7 +2115,7 @@ mod tests {
             ActionStmt::Assign {
                 name: tc.y,
                 expr: Expr::Literal {
-                    val: Value::Number { val: 5 },
+                    val: Value::Int { val: 5 },
                 },
             },
             ActionStmt::Assign {
@@ -2124,7 +2124,7 @@ mod tests {
                     op: crate::ast::BinOp::Add,
                     expr1: Box::new(Expr::Variable { name: tc.x }),
                     expr2: Box::new(Expr::Literal {
-                        val: Value::Number { val: 1 },
+                        val: Value::Int { val: 1 },
                     }),
                 },
             },
@@ -2163,7 +2163,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -2216,7 +2216,7 @@ mod tests {
                     name: tc.x,
                     ty: None,
                     val: Expr::Literal {
-                        val: Value::Number { val: 0 },
+                        val: Value::Int { val: 0 },
                     },
                 }],
             )
@@ -2256,7 +2256,7 @@ mod tests {
                 op: crate::ast::BinOp::Add,
                 expr1: Box::new(Expr::Variable { name: tc.x }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             },
         }];

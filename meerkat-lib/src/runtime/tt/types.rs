@@ -1,8 +1,11 @@
-//! Type definitions
+//! Type system representations
+//!
+//! This module defines the core type representation structures used during parsing,
+//! type checking, and translation of type annotations
 
 use crate::runtime::interner::Symbol;
 
-/// Represents a type in the Meerkat language.
+/// Represents a type in the Meerkat language
 ///
 /// This enum models all valid types including primitives, tuples, and function
 /// signatures
@@ -16,7 +19,7 @@ pub enum Type {
     Func(Box<Type>, Box<Type>),
 }
 
-/// Represents a function parameter.
+/// Represents a function parameter
 ///
 /// This structure holds the name of a parameter and its optional type annotation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,7 +28,17 @@ pub struct Param {
     pub ty: Option<Type>,
 }
 
+/// Implement the `Display` trait for the `Type` type
+///
+/// Provides a human-readable string representation of a type
 impl std::fmt::Display for Type {
+    /// Format the type for display
+    ///
+    /// Args:
+    ///     `f` (`&mut std::fmt::Formatter<'_>`): The formatter target
+    ///
+    /// Returns:
+    ///     `std::fmt::Result`: The result of the formatting operation
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "int"),
@@ -47,7 +60,17 @@ impl std::fmt::Display for Type {
     }
 }
 
+/// Implement the `Display` trait for the `Param` type
+///
+/// Provides a human-readable string representation of a parameter
 impl std::fmt::Display for Param {
+    /// Format the parameter for display
+    ///
+    /// Args:
+    ///     `f` (`&mut std::fmt::Formatter<'_>`): The formatter target
+    ///
+    /// Returns:
+    ///     `std::fmt::Result`: The result of the formatting operation
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(ty) = &self.ty {
             write!(f, "{}: {}", self.name, ty)

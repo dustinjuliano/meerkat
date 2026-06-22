@@ -1,0 +1,50 @@
+service type_suite {
+    // def declarations with various type permutations
+    def d_int: int = 42;
+    def d_str: string = "hello";
+    def d_bool: bool = true;
+    def d_unit: unit = 42;
+
+    // Functions with primitive and tuple type signatures
+    def d_func: (int) -> string = fn (a: int) => "res";
+    pub def d_nullary: () -> int = fn () => 42;
+
+    // Single parenthesized type signature
+    def d_single_paren: (int) = 42;
+
+    // Complex higher-order function type
+    def d_complex: (int -> bool) -> (string -> bool) =
+        fn (f: int -> bool) => fn (s: string) => true;
+
+    // Mixed parameters, single unqualified parameter, higher order parameters
+    pub def d_mixed: (int, string) -> bool =
+        fn (a: int, b: string) => true;
+}
+
+@test(type_suite) {
+    // var declaration types inside test/actions
+    let l_int: int = 100;
+    let l_str: string = "test";
+    let l_bool: bool = false;
+    let l_unit: unit = 100;
+
+    let l_func: () -> bool = fn () => true;
+
+    // Single unqualified parameter
+    let l_single_param: (int) -> int = fn x => x;
+
+    // Higher-order function type annotation
+    let l_arrow: int -> string -> bool =
+        fn (x: int) => fn (y: string) => true;
+
+    // Mixed parameters lambda (typed and untyped)
+    let l_mixed: (int, bool) -> bool =
+        fn (x: int, y) => true;
+
+    // Verify executions
+    assert(l_int == 100);
+    assert(l_func());
+    assert(l_single_param(5) == 5);
+    assert(l_arrow(1)("a"));
+    assert(l_mixed(1, "untyped"));
+}

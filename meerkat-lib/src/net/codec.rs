@@ -4,11 +4,13 @@
 //! `AST` types and the serialized network representation variants
 
 use crate::error::{Error, Result};
-use crate::net::ast::{NetActionStmt, NetBinOp, NetDataType, NetExpr, NetField, NetUnOp, NetValue};
-use crate::runtime::ast::{ActionStmt, BinOp, DataType, Expr, Field, UnOp, Value};
+use crate::net::ast::{
+    NetActionStmt, NetBinOp, NetExpr, NetField, NetParam, NetTableType, NetType, NetUnOp, NetValue,
+};
+use crate::runtime::ast::{ActionStmt, BinOp, Expr, Field, TableType, UnOp, Value};
 use crate::runtime::interner::Interner;
-use crate::runtime::limits::{MAX_IDENTIFIER_LENGTH, MAX_STRING_LITERAL_LENGTH};
-use crate::runtime::tt::Param;
+use crate::runtime::limits::{MAX_IDENTIFIER_LENGTH, MAX_STRING_LITERAL_LENGTH, MAX_TYPE_DEPTH};
+use crate::runtime::tt::{Param, Type};
 
 fn validate_identifier(s: &str) -> Result<()> {
     if s.len() > MAX_IDENTIFIER_LENGTH {
@@ -30,6 +32,118 @@ fn validate_string_literal(s: &str) -> Result<()> {
     Ok(())
 }
 
+/// Encode a runtime `Type` into a network representation
+///
+/// Args:
+///     `ty` (`&Type`): The runtime type to encode
+///
+/// Returns:
+///     `Result<NetType>`: The encoded network type representation
+pub fn encode_type(ty: &Type) -> Result<NetType> {
+    match ty {
+        Type::Int => Ok(NetType::Int),
+        Type::String => Ok(NetType::String),
+        Type::Bool => Ok(NetType::Bool),
+        Type::Unit => Ok(NetType::Unit),
+        Type::Tuple(ts) => {
+            let mut encoded_ts = Vec::new();
+            for t in ts {
+                encoded_ts.push(encode_type(t)?);
+            }
+            Ok(NetType::Tuple(encoded_ts))
+        }
+        Type::Func(t1, t2) => {
+            let et1 = encode_type(t1)?;
+            let et2 = encode_type(t2)?;
+            Ok(NetType::Func(Box::new(et1), Box::new(et2)))
+        }
+    }
+}
+
+/// Decode a network `NetType` representation into a runtime `Type`
+///
+/// Enforces type depth limit to prevent stack-overflow DoS attacks
+///
+/// Args:
+///     `ty` (`NetType`): The network type to decode
+///     `depth` (`usize`): The current recursion depth
+///
+/// Returns:
+///     `Result<Type>`: The decoded runtime type
+///
+/// Raises:
+///     `Error::LimitExceeded`: The type nesting depth exceeds
+///     maximum limit
+pub fn decode_type(ty: NetType, depth: usize) -> Result<Type> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(Error::LimitExceeded(format!(
+            "Type nesting depth exceeds maximum limit of {}",
+            MAX_TYPE_DEPTH
+        )));
+    }
+    match ty {
+        NetType::Int => Ok(Type::Int),
+        NetType::String => Ok(Type::String),
+        NetType::Bool => Ok(Type::Bool),
+        NetType::Unit => Ok(Type::Unit),
+        NetType::Tuple(ts) => {
+            let mut decoded_ts = Vec::new();
+            for t in ts {
+                decoded_ts.push(decode_type(t, depth + 1)?);
+            }
+            Ok(Type::Tuple(decoded_ts))
+        }
+        NetType::Func(t1, t2) => {
+            let dt1 = decode_type(*t1, depth + 1)?;
+            let dt2 = decode_type(*t2, depth + 1)?;
+            Ok(Type::Func(Box::new(dt1), Box::new(dt2)))
+        }
+    }
+}
+
+/// Encode a runtime `Param` into a network representation
+///
+/// Args:
+///     `param` (`&Param`): The runtime parameter to encode
+///     `interner` (`&Interner`): The interner for symbol lookup
+///
+/// Returns:
+///     `Result<NetParam>`: The encoded network parameter
+///     representation
+pub fn encode_param(param: &Param, interner: &Interner) -> Result<NetParam> {
+    let name_str = interner.get(param.name);
+    validate_identifier(name_str)?;
+    let ty = match &param.ty {
+        Some(t) => Some(encode_type(t)?),
+        None => None,
+    };
+    Ok(NetParam {
+        name: name_str.to_string(),
+        ty,
+    })
+}
+
+/// Decode a network `NetParam` representation into a runtime `Param`
+///
+/// Args:
+///     `param` (`NetParam`): The network parameter to decode
+///     `interner` (`&mut Interner`): The interner for symbol
+///     creation
+///
+/// Returns:
+///     `Result<Param>`: The decoded runtime parameter
+pub fn decode_param(param: NetParam, interner: &mut Interner) -> Result<Param> {
+    validate_identifier(&param.name)?;
+    let ty = match param.ty {
+        Some(t) => Some(decode_type(t, 0)?),
+        None => None,
+    };
+    Ok(Param {
+        name: interner.insert(&param.name),
+        ty,
+    })
+}
+
 /// Encode a runtime `Value` into a network representation
 ///
 /// Args:
@@ -40,7 +154,7 @@ fn validate_string_literal(s: &str) -> Result<()> {
 ///     `Result<NetValue>`: The encoded `NetValue` network representation
 pub fn encode_value(val: &Value, interner: &Interner) -> Result<NetValue> {
     match val {
-        Value::Number { val } => Ok(NetValue::Number { val: *val }),
+        Value::Int { val } => Ok(NetValue::Int { val: *val }),
         Value::Bool { val } => Ok(NetValue::Bool { val: *val }),
         Value::String { val } => {
             validate_string_literal(val)?;
@@ -108,7 +222,7 @@ pub fn encode_value(val: &Value, interner: &Interner) -> Result<NetValue> {
 ///     `Result<Value>`: The decoded runtime `Value`
 pub fn decode_value(val: NetValue, interner: &mut Interner) -> Result<Value> {
     match val {
-        NetValue::Number { val } => Ok(Value::Number { val }),
+        NetValue::Int { val } => Ok(Value::Int { val }),
         NetValue::Bool { val } => Ok(Value::Bool { val }),
         NetValue::String { val } => {
             validate_string_literal(&val)?;
@@ -214,9 +328,7 @@ pub fn encode_expr(expr: &Expr, interner: &Interner) -> Result<NetExpr> {
         Expr::Func { params, body } => {
             let mut encoded_params = Vec::new();
             for p in params {
-                let p_str = interner.get(p.name);
-                validate_identifier(p_str)?;
-                encoded_params.push(p_str.to_string());
+                encoded_params.push(encode_param(p, interner)?);
             }
             let encoded_body = Box::new(encode_expr(body, interner)?);
             Ok(NetExpr::Func {
@@ -356,16 +468,10 @@ pub fn decode_expr(expr: NetExpr, interner: &mut Interner) -> Result<Expr> {
             expr2: Box::new(decode_expr(*expr2, interner)?),
         }),
         NetExpr::Func { params, body } => {
-            for p in &params {
-                validate_identifier(p)?;
+            let mut decoded_params = Vec::new();
+            for p in params {
+                decoded_params.push(decode_param(p, interner)?);
             }
-            let decoded_params = params
-                .into_iter()
-                .map(|p| Param {
-                    name: interner.insert(&p),
-                    ty: None,
-                })
-                .collect();
             let decoded_body = Box::new(decode_expr(*body, interner)?);
             Ok(Expr::Func {
                 params: decoded_params,
@@ -462,11 +568,16 @@ pub fn decode_expr(expr: NetExpr, interner: &mut Interner) -> Result<Expr> {
 ///     `Result<NetActionStmt>`: The encoded `NetActionStmt` network representation
 pub fn encode_action_stmt(stmt: &ActionStmt, interner: &Interner) -> Result<NetActionStmt> {
     match stmt {
-        ActionStmt::Let { name, ty: _, expr } => {
+        ActionStmt::Let { name, ty, expr } => {
             let name_str = interner.get(*name);
             validate_identifier(name_str)?;
+            let encoded_ty = match ty {
+                Some(t) => Some(encode_type(t)?),
+                None => None,
+            };
             Ok(NetActionStmt::Let {
                 name: name_str.to_string(),
+                ty: encoded_ty,
                 expr: encode_expr(expr, interner)?,
             })
         }
@@ -508,11 +619,15 @@ pub fn encode_action_stmt(stmt: &ActionStmt, interner: &Interner) -> Result<NetA
 ///     `Result<ActionStmt>`: The decoded runtime `ActionStmt`
 pub fn decode_action_stmt(stmt: NetActionStmt, interner: &mut Interner) -> Result<ActionStmt> {
     match stmt {
-        NetActionStmt::Let { name, expr } => {
+        NetActionStmt::Let { name, ty, expr } => {
             validate_identifier(&name)?;
+            let decoded_ty = match ty {
+                Some(t) => Some(decode_type(t, 0)?),
+                None => None,
+            };
             Ok(ActionStmt::Let {
                 name: interner.insert(&name),
-                ty: None,
+                ty: decoded_ty,
                 expr: decode_expr(expr, interner)?,
             })
         }
@@ -552,7 +667,7 @@ pub fn encode_field(field: &Field, interner: &Interner) -> Result<NetField> {
     validate_identifier(name_str)?;
     Ok(NetField {
         name: name_str.to_string(),
-        ty: encode_datatype(&field.ty),
+        ty: encode_tabletype(&field.ty),
     })
 }
 
@@ -568,7 +683,7 @@ pub fn decode_field(field: NetField, interner: &mut Interner) -> Result<Field> {
     validate_identifier(&field.name)?;
     Ok(Field {
         name: interner.insert(&field.name),
-        ty: decode_datatype(field.ty),
+        ty: decode_tabletype(field.ty),
     })
 }
 
@@ -642,33 +757,33 @@ pub fn decode_binop(op: NetBinOp) -> BinOp {
     }
 }
 
-/// Encode a runtime `DataType` into its network equivalent
+/// Encode a runtime `TableType` into its network equivalent
 ///
 /// Args:
-///     t (`&DataType`): The runtime data type to encode
+///     t (`&TableType`): The runtime table type to encode
 ///
 /// Returns:
-///     `NetDataType`: The encoded network data type representation
-pub fn encode_datatype(t: &DataType) -> NetDataType {
+///     `NetTableType`: The encoded network table type representation
+pub fn encode_tabletype(t: &TableType) -> NetTableType {
     match t {
-        DataType::String => NetDataType::String,
-        DataType::Number => NetDataType::Number,
-        DataType::Bool => NetDataType::Bool,
+        TableType::String => NetTableType::String,
+        TableType::Int => NetTableType::Int,
+        TableType::Bool => NetTableType::Bool,
     }
 }
 
-/// Decode a network `NetDataType` into its runtime equivalent
+/// Decode a network `NetTableType` into its runtime equivalent
 ///
 /// Args:
-///     t (`NetDataType`): The network data type to decode
+///     t (`NetTableType`): The network table type to decode
 ///
 /// Returns:
-///     `DataType`: The decoded runtime data type representation
-pub fn decode_datatype(t: NetDataType) -> DataType {
+///     `TableType`: The decoded runtime table type representation
+pub fn decode_tabletype(t: NetTableType) -> TableType {
     match t {
-        NetDataType::String => DataType::String,
-        NetDataType::Number => DataType::Number,
-        NetDataType::Bool => DataType::Bool,
+        NetTableType::String => TableType::String,
+        NetTableType::Int => TableType::Int,
+        NetTableType::Bool => TableType::Bool,
     }
 }
 
@@ -690,7 +805,7 @@ mod tests {
             name: var_x,
             ty: None,
             expr: Expr::Literal {
-                val: Value::Number { val: 42 },
+                val: Value::Int { val: 42 },
             },
         };
         let stmt2 = ActionStmt::Insert {
@@ -734,7 +849,7 @@ mod tests {
             },
         };
         let env_key = interner_orig.insert("y");
-        let env_val = Value::Number { val: 123 };
+        let env_val = Value::Int { val: 123 };
         let service = interner_orig.insert("my_service");
 
         let original_value = Value::Closure {
@@ -767,10 +882,10 @@ mod tests {
         let tuple_expr = Expr::Tuple {
             val: vec![
                 Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 },
                 Expr::Literal {
-                    val: Value::Number { val: 2 },
+                    val: Value::Int { val: 2 },
                 },
             ],
         };
@@ -782,7 +897,7 @@ mod tests {
         let key_val_expr = Expr::KeyVal {
             name: name_kv,
             value: Box::new(Expr::Literal {
-                val: Value::Number { val: 3 },
+                val: Value::Int { val: 3 },
             }),
         };
         run_expr_test(&key_val_expr, &interner);
@@ -816,10 +931,10 @@ mod tests {
             let binop_expr = Expr::Binop {
                 op: *op,
                 expr1: Box::new(Expr::Literal {
-                    val: Value::Number { val: 5 },
+                    val: Value::Int { val: 5 },
                 }),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 6 },
+                    val: Value::Int { val: 6 },
                 }),
             };
             run_expr_test(&binop_expr, &interner);
@@ -832,10 +947,10 @@ mod tests {
                 val: Value::Bool { val: true },
             }),
             expr1: Box::new(Expr::Literal {
-                val: Value::Number { val: 7 },
+                val: Value::Int { val: 7 },
             }),
             expr2: Box::new(Expr::Literal {
-                val: Value::Number { val: 8 },
+                val: Value::Int { val: 8 },
             }),
         };
         run_expr_test(&if_expr, &interner);
@@ -861,7 +976,7 @@ mod tests {
                 ty: None,
             }],
             body: Box::new(Expr::Literal {
-                val: Value::Number { val: 9 },
+                val: Value::Int { val: 9 },
             }),
         };
         run_expr_test(&func_expr, &interner);
@@ -875,13 +990,13 @@ mod tests {
                 ty: None,
             }],
             body: Box::new(Expr::Literal {
-                val: Value::Number { val: 9 },
+                val: Value::Int { val: 9 },
             }),
         };
         let call_expr = Expr::Call {
             func: Box::new(func_expr),
             args: vec![Expr::Literal {
-                val: Value::Number { val: 10 },
+                val: Value::Int { val: 10 },
             }],
         };
         run_expr_test(&call_expr, &interner);
@@ -899,7 +1014,7 @@ mod tests {
         // 4. Action
         let interner = Interner::new();
         let action_expr = Expr::Action(vec![ActionStmt::Do(Expr::Literal {
-            val: Value::Number { val: 11 },
+            val: Value::Int { val: 11 },
         })]);
         run_expr_test(&action_expr, &interner);
     }
@@ -935,15 +1050,15 @@ mod tests {
         let col2 = interner.insert("col2");
         let f1 = Field {
             name: col1,
-            ty: DataType::String,
+            ty: TableType::String,
         };
         let f2 = Field {
             name: col2,
-            ty: DataType::Number,
+            ty: TableType::Int,
         };
         let f3 = Field {
             name: col2,
-            ty: DataType::Bool,
+            ty: TableType::Bool,
         };
         let table_expr = Expr::Table {
             schema: vec![f1, f2, f3],
@@ -963,10 +1078,10 @@ mod tests {
             table_name,
             column_name: col1,
             operation: Box::new(Expr::Literal {
-                val: Value::Number { val: 42 },
+                val: Value::Int { val: 42 },
             }),
             identity: Box::new(Expr::Literal {
-                val: Value::Number { val: 0 },
+                val: Value::Int { val: 0 },
             }),
         };
         run_expr_test(&fold_expr, &interner);
@@ -986,14 +1101,14 @@ mod tests {
         // 1. Expr
         let interner = Interner::new();
         let stmt_expr = ActionStmt::Expr(Expr::Literal {
-            val: Value::Number { val: 100 },
+            val: Value::Int { val: 100 },
         });
         run_stmt_test(&stmt_expr, &interner);
 
         // 2. Do
         let interner = Interner::new();
         let stmt_do = ActionStmt::Do(Expr::Literal {
-            val: Value::Number { val: 200 },
+            val: Value::Int { val: 200 },
         });
         run_stmt_test(&stmt_do, &interner);
 
@@ -1013,7 +1128,7 @@ mod tests {
         let stmt_assign = ActionStmt::Assign {
             name: name_var,
             expr: Expr::Literal {
-                val: Value::Number { val: 300 },
+                val: Value::Int { val: 300 },
             },
         };
         run_stmt_test(&stmt_assign, &interner);
@@ -1042,7 +1157,7 @@ mod tests {
     #[test]
     fn test_codec_deeply_nested_structure() {
         let mut expr = Expr::Literal {
-            val: Value::Number { val: 0 },
+            val: Value::Int { val: 0 },
         };
         let mut interner = Interner::new();
         for _ in 0..20 {
@@ -1050,7 +1165,7 @@ mod tests {
                 op: BinOp::Add,
                 expr1: Box::new(expr),
                 expr2: Box::new(Expr::Literal {
-                    val: Value::Number { val: 1 },
+                    val: Value::Int { val: 1 },
                 }),
             };
         }
@@ -1083,7 +1198,7 @@ mod tests {
         let net_val = NetValue::Closure {
             params: vec![long_ident],
             body: Box::new(NetExpr::Literal {
-                val: NetValue::Number { val: 0 },
+                val: NetValue::Int { val: 0 },
             }),
             env: vec![],
             service_name: "test".to_string(),
@@ -1143,6 +1258,49 @@ mod tests {
         );
         let mut interner = Interner::new();
         let res = decode_action_stmt(net_stmt, &mut interner);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
+    }
+
+    /// Verify round-trip encoding and decoding for NetType and NetParam structures
+    #[test]
+    fn test_codec_type_and_param_roundtrip() {
+        let mut interner_orig = Interner::new();
+        let param_name = interner_orig.insert("param_x");
+
+        // Construct Type::Func(Int -> String, Bool -> Unit)
+        let original_type = Type::Func(
+            Box::new(Type::Func(Box::new(Type::Int), Box::new(Type::String))),
+            Box::new(Type::Func(Box::new(Type::Bool), Box::new(Type::Unit))),
+        );
+
+        let original_param = Param {
+            name: param_name,
+            ty: Some(original_type.clone()),
+        };
+
+        let encoded_type = encode_type(&original_type).unwrap();
+        let encoded_param = encode_param(&original_param, &interner_orig).unwrap();
+
+        let mut interner_new = Interner::new();
+        let decoded_type = decode_type(encoded_type, 0).unwrap();
+        let decoded_param = decode_param(encoded_param, &mut interner_new).unwrap();
+
+        assert_eq!(original_type, decoded_type);
+        assert_eq!(original_param.ty, decoded_param.ty);
+    }
+
+    /// Verify that deserializing a NetType exceeding MAX_TYPE_DEPTH
+    /// returns a limit exceeded error
+    #[test]
+    fn test_codec_type_depth_overflow() {
+        // Construct a NetType that exceeds MAX_TYPE_DEPTH (16)
+        let mut current_type = NetType::Int;
+        for _ in 0..(MAX_TYPE_DEPTH + 1) {
+            current_type = NetType::Func(Box::new(NetType::Bool), Box::new(current_type));
+        }
+
+        let res = decode_type(current_type, 0);
         assert!(res.is_err());
         assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
     }

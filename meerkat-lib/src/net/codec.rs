@@ -34,12 +34,25 @@ fn validate_string_literal(s: &str) -> Result<()> {
 
 /// Encode a runtime `Type` into a network representation
 ///
+/// Enforces type depth limit to prevent stack-overflow DoS attacks
+///
 /// Args:
 ///     `ty` (`&Type`): The runtime type to encode
+///     `depth` (`usize`): The current recursion depth
 ///
 /// Returns:
 ///     `Result<NetType>`: The encoded network type representation
-pub fn encode_type(ty: &Type) -> Result<NetType> {
+///
+/// Raises:
+///     `Error::LimitExceeded`: The type nesting depth exceeds
+///     maximum limit
+pub fn encode_type(ty: &Type, depth: usize) -> Result<NetType> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(Error::LimitExceeded(format!(
+            "Type nesting depth exceeds maximum limit of {}",
+            MAX_TYPE_DEPTH
+        )));
+    }
     match ty {
         Type::Int => Ok(NetType::Int),
         Type::String => Ok(NetType::String),
@@ -48,13 +61,13 @@ pub fn encode_type(ty: &Type) -> Result<NetType> {
         Type::Tuple(ts) => {
             let mut encoded_ts = Vec::new();
             for t in ts {
-                encoded_ts.push(encode_type(t)?);
+                encoded_ts.push(encode_type(t, depth + 1)?);
             }
             Ok(NetType::Tuple(encoded_ts))
         }
         Type::Func(t1, t2) => {
-            let et1 = encode_type(t1)?;
-            let et2 = encode_type(t2)?;
+            let et1 = encode_type(t1, depth + 1)?;
+            let et2 = encode_type(t2, depth + 1)?;
             Ok(NetType::Func(Box::new(et1), Box::new(et2)))
         }
     }
@@ -114,7 +127,7 @@ pub fn encode_param(param: &Param, interner: &Interner) -> Result<NetParam> {
     let name_str = interner.get(param.name);
     validate_identifier(name_str)?;
     let ty = match &param.ty {
-        Some(t) => Some(encode_type(t)?),
+        Some(t) => Some(encode_type(t, 0)?),
         None => None,
     };
     Ok(NetParam {
@@ -572,7 +585,7 @@ pub fn encode_action_stmt(stmt: &ActionStmt, interner: &Interner) -> Result<NetA
             let name_str = interner.get(*name);
             validate_identifier(name_str)?;
             let encoded_ty = match ty {
-                Some(t) => Some(encode_type(t)?),
+                Some(t) => Some(encode_type(t, 0)?),
                 None => None,
             };
             Ok(NetActionStmt::Let {
@@ -1279,7 +1292,7 @@ mod tests {
             ty: Some(original_type.clone()),
         };
 
-        let encoded_type = encode_type(&original_type).unwrap();
+        let encoded_type = encode_type(&original_type, 0).unwrap();
         let encoded_param = encode_param(&original_param, &interner_orig).unwrap();
 
         let mut interner_new = Interner::new();
@@ -1301,6 +1314,21 @@ mod tests {
         }
 
         let res = decode_type(current_type, 0);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
+    }
+
+    /// Verify that encoding a Type exceeding MAX_TYPE_DEPTH returns
+    /// a limit exceeded error
+    #[test]
+    fn test_codec_encode_type_depth_overflow() {
+        // Construct a Type that exceeds MAX_TYPE_DEPTH (16)
+        let mut current_type = Type::Int;
+        for _ in 0..(MAX_TYPE_DEPTH + 1) {
+            current_type = Type::Func(Box::new(Type::Bool), Box::new(current_type));
+        }
+
+        let res = encode_type(&current_type, 0);
         assert!(res.is_err());
         assert!(matches!(res.unwrap_err(), Error::LimitExceeded(_)));
     }

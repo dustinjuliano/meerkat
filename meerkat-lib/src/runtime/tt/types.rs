@@ -58,12 +58,14 @@ impl std::fmt::Display for Type {
             Type::Func(t1, t2) => {
                 // Determine if the left-hand side is a function type
                 // to preserve right-associativity during formatting
-                let is_func = match &**t1 {
+                let is_func = match t1.as_ref() {
                     Type::Func(_, _) => true,
                     Type::Int | Type::String | Type::Bool | Type::Unit | Type::Tuple(_) => false,
                 };
                 if is_func {
                     write!(f, "({}) -> {}", t1, t2)
+                } else if matches!(t1.as_ref(), Type::Unit) {
+                    write!(f, "() -> {}", t2)
                 } else {
                     write!(f, "{} -> {}", t1, t2)
                 }
@@ -130,5 +132,20 @@ mod tests {
             Box::new(Type::Func(Box::new(Type::String), Box::new(Type::Unit))),
         );
         assert_eq!(ty4.to_string(), "(int -> bool) -> string -> unit");
+
+        // case 5: () -> int
+        let ty5 = Type::Func(Box::new(Type::Unit), Box::new(Type::Int));
+        assert_eq!(ty5.to_string(), "() -> int");
+
+        // case 6: (() -> int) -> bool
+        let ty6 = Type::Func(
+            Box::new(Type::Func(Box::new(Type::Unit), Box::new(Type::Int))),
+            Box::new(Type::Bool),
+        );
+        assert_eq!(ty6.to_string(), "(() -> int) -> bool");
+
+        // case 7: (unit) -> int
+        let ty7 = Type::Func(Box::new(Type::Tuple(vec![Type::Unit])), Box::new(Type::Int));
+        assert_eq!(ty7.to_string(), "(unit) -> int");
     }
 }
